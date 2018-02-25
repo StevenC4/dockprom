@@ -1,12 +1,14 @@
 version: '2.1'
 
 networks:
+  default:
+    external:
+      name: nginx-proxy
+  nginx-proxy:
+    external:
+      name: nginx-proxy
   monitor-net:
     driver: bridge
-
-volumes:
-    prometheus_data: {}
-    grafana_data: {}
 
 services:
 
@@ -15,7 +17,7 @@ services:
     container_name: prometheus
     volumes:
       - ./prometheus/:/etc/prometheus/
-      - prometheus_data:/prometheus
+      - "${PROMETHEUS_DATA_PATH}:/prometheus"
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
@@ -89,7 +91,7 @@ services:
     image: grafana/grafana:4.6.3
     container_name: grafana
     volumes:
-      - grafana_data:/var/lib/grafana
+      - "${GRAFANA_DATA_PATH}:/var/lib/grafana"
       - ./grafana/datasources:/etc/grafana/datasources
       - ./grafana/dashboards:/etc/grafana/dashboards
       - ./grafana/setup.sh:/setup.sh
@@ -98,11 +100,17 @@ services:
       - GF_SECURITY_ADMIN_USER=${ADMIN_USER:-admin}
       - GF_SECURITY_ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
       - GF_USERS_ALLOW_SIGN_UP=false
+      - VIRTUAL_HOST${VIRTUAL_HOST}
+      - VIRTUAL_PORT=${VIRTUAL_PORT}
+      - VIRTUAL_NETWORK=nginx-proxy
+      - LETSENCRYPT_HOST=${LETSENCRYPT_HOST}
+      - LETSENCRYPT_EMAIL=${LETSENCRYPT_EMAIL}
     restart: unless-stopped
     expose:
       - 3000
     networks:
       - monitor-net
+      - nginx-proxy
     labels:
       org.label-schema.group: "monitoring"
 
