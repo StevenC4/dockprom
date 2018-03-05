@@ -10,6 +10,9 @@ networks:
   monitor-net:
     driver: bridge
 
+volumes:
+    prometheus_data: {}
+
 services:
 
   prometheus:
@@ -17,7 +20,7 @@ services:
     container_name: prometheus
     volumes:
       - ./prometheus/:/etc/prometheus/
-      - "${PROMETHEUS_DATA_PATH}:/prometheus"
+      - prometheus_data:/prometheus
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
@@ -100,7 +103,7 @@ services:
       - GF_SECURITY_ADMIN_USER=${ADMIN_USER:-admin}
       - GF_SECURITY_ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
       - GF_USERS_ALLOW_SIGN_UP=false
-      - VIRTUAL_HOST${VIRTUAL_HOST}
+      - VIRTUAL_HOST=${VIRTUAL_HOST}
       - VIRTUAL_PORT=${VIRTUAL_PORT}
       - VIRTUAL_NETWORK=nginx-proxy
       - LETSENCRYPT_HOST=${LETSENCRYPT_HOST}
