@@ -78,7 +78,7 @@ services:
       - /var/run:/var/run:ro
       - /sys:/sys:ro
       - /var/lib/docker:/var/lib/docker:ro
-      #- /cgroup:/cgroup:ro #doesn't work on MacOS only for Linux
+      - /cgroup:/cgroup:ro #doesn't work on MacOS only for Linux
     restart: unless-stopped
     expose:
       - 8080
@@ -94,6 +94,8 @@ services:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
       - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+    env_file:
+      - .env
     environment:
       - GF_SECURITY_ADMIN_USER=${ADMIN_USER:-admin}
       - GF_SECURITY_ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
@@ -121,13 +123,15 @@ services:
     image: caddy:2.6.4
     container_name: caddy
     ports:
-      - "3000:3000"
-      - "8080:8080"
+      - "3001:3000"
+      - "8081:8080"
       - "9090:9090"
       - "9093:9093"
       - "9091:9091"
     volumes:
       - ./caddy:/etc/caddy
+    env_file:
+      - .env
     environment:
       - ADMIN_USER=${ADMIN_USER:-admin}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}

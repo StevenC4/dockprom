@@ -1,11 +1,11 @@
+global:
+  smtp_smarthost: 'localhost:25'
+  smtp_from: 'alertmanager@stevenc4.com'
+
 route:
-    receiver: 'slack'
+    receiver: 'email'
 
 receivers:
-    - name: 'slack'
-      slack_configs:
-          - send_resolved: true
-            text: "{{ .CommonAnnotations.description }}"
-            username: 'Prometheus'
-            channel: '#<channel-name>'
-            api_url: 'https://hooks.slack.com/services/<webhook-id>'
+    - name: 'email'
+      email_configs:
+      - to: 'stevencarroll90@gmail.com'

@@ -3,28 +3,28 @@
 }
 
 :8080 {
-    basicauth /* {
+    basicauth {
         {$ADMIN_USER} {$ADMIN_PASSWORD_HASH}
     }    
     reverse_proxy cadvisor:8080
 }
 
 :9090 {
-    basicauth /* {
+    basicauth {
         {$ADMIN_USER} {$ADMIN_PASSWORD_HASH}
     }
     reverse_proxy prometheus:9090
 }
 
 :9093 {
-    basicauth /* {
+    basicauth {
         {$ADMIN_USER} {$ADMIN_PASSWORD_HASH}
     }
     reverse_proxy alertmanager:9093
 }
 
 :9091 {
-    basicauth /* {
+    basicauth {
         {$ADMIN_USER} {$ADMIN_PASSWORD_HASH}
     }    
     reverse_proxy pushgateway:9091
