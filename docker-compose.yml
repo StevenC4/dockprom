@@ -108,6 +108,7 @@ services:
       - 3000
     networks:
       - monitor-net
+      - home-reverse-proxy-net
     labels:
       org.label-schema.group: "monitoring"
 
@@ -119,7 +120,6 @@ services:
       - 9091
     networks:
       - monitor-net
-      - home-reverse-proxy-net
     labels:
       org.label-schema.group: "monitoring"
 
