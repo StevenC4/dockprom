@@ -3,6 +3,9 @@ version: '2.1'
 networks:
   monitor-net:
     driver: bridge
+  home-reverse-proxy-net:
+    name: home-reverse-proxy-net
+    external: true
 
 volumes:
     prometheus_data: {}
@@ -116,6 +119,7 @@ services:
       - 9091
     networks:
       - monitor-net
+      - home-reverse-proxy-net
     labels:
       org.label-schema.group: "monitoring"
 
