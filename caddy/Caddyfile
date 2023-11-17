@@ -26,6 +26,7 @@
 :9091 {
     basicauth {
         {$ADMIN_USER} {$ADMIN_PASSWORD_HASH}
+        animdl-automation $2a$14$d.FJBNySxR.d5kEuL8.dh.Q0xzvkraerD3ISIsZsz351e2oOKcJrG
     }    
     reverse_proxy pushgateway:9091
 }
