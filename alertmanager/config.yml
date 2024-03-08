@@ -1,11 +1,17 @@
 global:
-  smtp_smarthost: 'localhost:25'
+  smtp_smarthost: 'smtpd:25'
   smtp_from: 'alertmanager@stevenc4.com'
+  smtp_require_tls: false
 
 route:
     receiver: 'email'
+    repeat_interval: 30s
+    group_wait: 15s
+    group_interval: 15s
 
 receivers:
-    - name: 'email'
-      email_configs:
-      - to: 'stevencarroll90@gmail.com'
+  - name: 'email'
+    email_configs:
+    - to: 'stevencarroll90@gmail.com'
+      smarthost: 'smtpd:25'
+      from: 'alertmanager@stevenc4.com'
