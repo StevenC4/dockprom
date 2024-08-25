@@ -18,11 +18,11 @@ scrape_configs:
     static_configs:
       - targets: ['nodeexporter:9100']
         labels:
-          host: 192.168.1.111
+          host: 192.168.205.10
           hostname: mozart
-      - targets: ['192.168.1.10:9100']
+      - targets: ['192.168.201.10:9100']
         labels:
-          host: 192.168.1.10
+          host: 192.168.201.10
           hostname: pi.hole
 
   - job_name: 'cadvisor'
@@ -30,11 +30,11 @@ scrape_configs:
     static_configs:
       - targets: ['cadvisor:8080']
         labels:
-          host: 192.168.1.111
+          host: 192.168.205.10
           hostname: mozart
-      - targets: ['192.168.1.10:8080']
+      - targets: ['192.168.201.10:8080']
         labels:
-          host: 192.168.1.10
+          host: 192.168.201.10
           hostname: pi.hole
 
   - job_name: 'prometheus'
