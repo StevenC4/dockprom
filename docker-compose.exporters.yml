@@ -1,7 +1,4 @@
-version: '2.1'
-
 services:
-
   nodeexporter:
     image: prom/node-exporter:v1.6.1
     container_name: nodeexporter
