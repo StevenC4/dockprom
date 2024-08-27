@@ -24,6 +24,10 @@ scrape_configs:
         labels:
           host: 192.168.201.10
           hostname: pi.hole
+      - targets: ['192.168.201.11:9100']
+        labels:
+          host: 192.168.201.11
+          hostname: wireguard
 
   - job_name: 'cadvisor'
     scrape_interval: 5s
@@ -36,6 +40,10 @@ scrape_configs:
         labels:
           host: 192.168.201.10
           hostname: pi.hole
+      - targets: ['192.168.201.11:8080']
+        labels:
+          host: 192.168.201.11
+          hostname: wireguard
 
   - job_name: 'prometheus'
     scrape_interval: 10s
