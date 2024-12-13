@@ -50,7 +50,12 @@ services:
       - monitor-net
       - smtp-net
     labels:
-      org.label-schema.group: "monitoring"
+      - org.label-schema.group=monitoring
+      - homepage.group=Util
+      - homepage.name=Alert Manager
+      # - homepage.icon=emby.png
+      - homepage.href=https://alertmanager.carroll.live
+      - homepage.description=Alert Manager client
 
   nodeexporter:
     image: prom/node-exporter:v1.6.1
@@ -112,7 +117,12 @@ services:
       - monitor-net
       - home-reverse-proxy-net
     labels:
-      org.label-schema.group: "monitoring"
+      - org.label-schema.group=monitoring
+      - homepage.group=Util
+      - homepage.name=Grafana
+      # - homepage.icon=emby.png
+      - homepage.href=https://grafana.carroll.live
+      - homepage.description=Grafana client
 
   pushgateway:
     image: prom/pushgateway:v1.6.0
