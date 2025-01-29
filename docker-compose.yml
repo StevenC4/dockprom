@@ -56,6 +56,11 @@ services:
       # - homepage.icon=emby.png
       - homepage.href=https://alertmanager.carroll.live
       - homepage.description=Alert Manager client
+      - traefik.enable=true
+      - traefik.http.routers.alertmanager.rule=Host(`alertmanager.carroll.live`)
+      - traefik.http.routers.alertmanager.entrypoints=websecure
+      - traefik.http.routers.alertmanager.tls.certresolver=carroll_live_dns_resolver
+      - traefik.http.services.alertmanager.loadbalancer.server.port=9093
 
   nodeexporter:
     image: prom/node-exporter:v1.6.1
@@ -123,6 +128,11 @@ services:
       # - homepage.icon=emby.png
       - homepage.href=https://grafana.carroll.live
       - homepage.description=Grafana client
+      - traefik.enable=true
+      - traefik.http.routers.grafana.rule=Host(`grafana.carroll.live`)
+      - traefik.http.routers.grafana.entrypoints=websecure
+      - traefik.http.routers.grafana.tls.certresolver=carroll_live_dns_resolver
+      - traefik.http.services.grafana.loadbalancer.server.port=3000
 
   pushgateway:
     image: prom/pushgateway:v1.6.0
