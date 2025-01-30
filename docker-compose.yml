@@ -57,6 +57,7 @@ services:
       - homepage.href=https://alertmanager.carroll.live
       - homepage.description=Alert Manager client
       - traefik.enable=true
+      - traefik.docker.network=home-reverse-proxy-net
       - traefik.http.routers.alertmanager.rule=Host(`alertmanager.carroll.live`)
       - traefik.http.routers.alertmanager.entrypoints=websecure
       - traefik.http.routers.alertmanager.tls.certresolver=carroll_live_dns_resolver
@@ -129,6 +130,7 @@ services:
       - homepage.href=https://grafana.carroll.live
       - homepage.description=Grafana client
       - traefik.enable=true
+      - traefik.docker.network=home-reverse-proxy-net
       - traefik.http.routers.grafana.rule=Host(`grafana.carroll.live`)
       - traefik.http.routers.grafana.entrypoints=websecure
       - traefik.http.routers.grafana.tls.certresolver=carroll_live_dns_resolver
