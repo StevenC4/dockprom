@@ -62,9 +62,8 @@ services:
       - traefik.http.routers.alertmanager.entrypoints=websecure
       - traefik.http.routers.alertmanager.tls.certresolver=carroll_live_dns_resolver
       - traefik.http.services.alertmanager.loadbalancer.server.port=9093
-      - docker-dnsmasq-manager.enable=true
-      - docker-dnsmasq-manager.cname.subdomain=alertmanager.carroll.live
-      - docker-dnsmasq-manager.cname.target=mozart.carroll.live
+      - dockmasq.enabled=true
+      - dockmasq.a.name=alertmanager.carroll.live
 
   nodeexporter:
     image: prom/node-exporter:v1.6.1
@@ -138,9 +137,8 @@ services:
       - traefik.http.routers.grafana.entrypoints=websecure
       - traefik.http.routers.grafana.tls.certresolver=carroll_live_dns_resolver
       - traefik.http.services.grafana.loadbalancer.server.port=3000
-      - docker-dnsmasq-manager.enable=true
-      - docker-dnsmasq-manager.cname.subdomain=grafana.carroll.live
-      - docker-dnsmasq-manager.cname.target=mozart.carroll.live
+      - dockmasq.enabled=true
+      - dockmasq.a.name=grafana.carroll.live
 
   pushgateway:
     image: prom/pushgateway:v1.6.0
