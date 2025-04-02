@@ -32,5 +32,10 @@ services:
     network_mode: host
     labels:
       org.label-schema.group: "monitoring"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: "100m"
   
 
