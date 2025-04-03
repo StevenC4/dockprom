@@ -64,8 +64,9 @@ services:
       - traefik.http.routers.alertmanager.entrypoints=websecure
       - traefik.http.routers.alertmanager.tls.certresolver=carroll_live_dns_resolver
       - traefik.http.services.alertmanager.loadbalancer.server.port=9093
-      - dockmasq.enabled=true
-      - dockmasq.a.name=alertmanager.carroll.live
+      - coredns.enabled=true
+      - coredns.cname.name=alertmanager.carroll.live
+      - coredns.cname.value=mozart.carroll.live
 
   nodeexporter:
     image: prom/node-exporter:v1.6.1
@@ -141,8 +142,9 @@ services:
       - traefik.http.routers.grafana.entrypoints=websecure
       - traefik.http.routers.grafana.tls.certresolver=carroll_live_dns_resolver
       - traefik.http.services.grafana.loadbalancer.server.port=3000
-      - dockmasq.enabled=true
-      - dockmasq.a.name=grafana.carroll.live
+      - coredns.enabled=true
+      - coredns.cname.name=grafana.carroll.live
+      - coredns.cname.value=mozart.carroll.live
 
   pushgateway:
     image: prom/pushgateway:v1.6.0
