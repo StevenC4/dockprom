@@ -14,3 +14,6 @@ up:
 
 down:
 	docker compose -f ${docker-compose-file} down
+
+build:
+	docker build -t zfs-utils zfs-utils/.

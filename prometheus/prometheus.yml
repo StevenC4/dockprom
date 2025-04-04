@@ -28,7 +28,7 @@ scrape_configs:
         labels:
           host: 192.168.201.11
           hostname: wireguard
-
+  
   - job_name: 'cadvisor'
     scrape_interval: 5s
     static_configs:

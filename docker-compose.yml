@@ -10,6 +10,8 @@ volumes:
     prometheus_data: {}
     grafana_data: {}
 
+name: dockprom
+
 services:
   prometheus:
     image: prom/prometheus:v2.46.0
@@ -50,7 +52,21 @@ services:
       - monitor-net
       - smtp-net
     labels:
-      org.label-schema.group: "monitoring"
+      - org.label-schema.group=monitoring
+      - homepage.group=Util
+      - homepage.name=Alert Manager
+      # - homepage.icon=emby.png
+      - homepage.href=https://alertmanager.carroll.live
+      - homepage.description=Alert Manager client
+      - traefik.enable=true
+      - traefik.docker.network=home-reverse-proxy-net
+      - traefik.http.routers.alertmanager.rule=Host(`alertmanager.carroll.live`)
+      - traefik.http.routers.alertmanager.entrypoints=websecure
+      - traefik.http.routers.alertmanager.tls.certresolver=carroll_live_dns_resolver
+      - traefik.http.services.alertmanager.loadbalancer.server.port=9093
+      - coredns.enabled=true
+      - coredns.cname.name=alertmanager.carroll.live
+      - coredns.cname.value=mozart.carroll.live
 
   nodeexporter:
     image: prom/node-exporter:v1.6.1
@@ -59,11 +75,13 @@ services:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
       - /:/rootfs:ro
+      - ./textfile_collector:/textfile_collector:ro
     command:
       - '--path.procfs=/host/proc'
       - '--path.rootfs=/rootfs'
       - '--path.sysfs=/host/sys'
       - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+      - '--collector.textfile.directory=/textfile_collector'
     restart: unless-stopped
     expose:
       - 9100
@@ -112,7 +130,21 @@ services:
       - monitor-net
       - home-reverse-proxy-net
     labels:
-      org.label-schema.group: "monitoring"
+      - org.label-schema.group=monitoring
+      - homepage.group=Util
+      - homepage.name=Grafana
+      # - homepage.icon=emby.png
+      - homepage.href=https://grafana.carroll.live
+      - homepage.description=Grafana client
+      - traefik.enable=true
+      - traefik.docker.network=home-reverse-proxy-net
+      - traefik.http.routers.grafana.rule=Host(`grafana.carroll.live`)
+      - traefik.http.routers.grafana.entrypoints=websecure
+      - traefik.http.routers.grafana.tls.certresolver=carroll_live_dns_resolver
+      - traefik.http.services.grafana.loadbalancer.server.port=3000
+      - coredns.enabled=true
+      - coredns.cname.name=grafana.carroll.live
+      - coredns.cname.value=mozart.carroll.live
 
   pushgateway:
     image: prom/pushgateway:v1.6.0
@@ -149,3 +181,25 @@ services:
       - monitor-net
     labels:
       org.label-schema.group: "monitoring"
+  
+  zfs-utils:
+    container_name: zfs-utils
+    build:
+      context: ./zfs-utils
+    privileged: true
+    environment:
+      - PUID=1000
+      - PGID=1000
+    volumes:
+      - /dev:/dev:ro
+      - ./textfile_collector:/zfs-metrics
+
+  # Scheduling
+  ofelia-dockprom:
+    container_name: ofelia-dockprom
+    image: mcuadros/ofelia:latest
+    command: daemon --config=/opt/config.ini
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./ofelia/opt:/opt
+    restart: unless-stopped
