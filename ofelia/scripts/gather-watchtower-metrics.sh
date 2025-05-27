@@ -10,9 +10,19 @@ TEMP_FILE="${METRICS_FILE}.tmp"
 # Read bearer token
 BEARER_TOKEN=$(cat /run/secrets/watchtower_bearer_token)
 
-# Get hostname for labeling (you'll need to customize this per RPI)
+# Get hostname and IP for labeling (BusyBox compatible)
 HOSTNAME=$(hostname)
-HOST_IP=$(hostname -I | awk '{print $1}' 2>/dev/null || echo "unknown")
+
+# Get IP address using ip command or fallback methods
+HOST_IP=$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}' 2>/dev/null)
+if [ -z "$HOST_IP" ]; then
+    # Fallback: try to get IP from network interfaces
+    HOST_IP=$(ip addr show 2>/dev/null | grep 'inet ' | grep -v '127.0.0.1' | head -1 | awk '{print $2}' | cut -d'/' -f1)
+fi
+if [ -z "$HOST_IP" ]; then
+    # Final fallback
+    HOST_IP="unknown"
+fi
 
 # Scrape watchtower metrics using Docker DNS
 curl -s -H "Authorization: Bearer $BEARER_TOKEN" \
