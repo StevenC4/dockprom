@@ -1,3 +1,11 @@
+secrets:
+  watchtower_bearer_token:
+    file: ./secrets/watchtower_bearer_token.txt
+
+networks:
+  watchtower-net:
+    external: true
+
 services:
   nodeexporter:
     image: prom/node-exporter:v1.6.1
@@ -11,6 +19,7 @@ services:
       - '--path.rootfs=/rootfs'
       - '--path.sysfs=/host/sys'
       - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+      - '--collector.textfile.directory=/shared-metrics'
     restart: unless-stopped
     network_mode: host
     labels:
@@ -38,6 +47,21 @@ services:
           cpus: "0.25"
           memory: "100m"
   
+  watchtower-metrics-collector:
+    image: alpine:latest
+    container_name: watchtower-metrics-collector
+    command: sleep infinity
+    secrets:
+      - watchtower_bearer_token
+    volumes:
+      - ./textfile_collector:/textfile_collector
+      - ./ofelia/scripts:/scripts:ro
+    networks:
+      - watchtower-net
+    restart: unless-stopped
+    labels:
+      org.label-schema.group: "monitoring"
+
   # Scheduling
   ofelia-dockprom:
     container_name: ofelia-dockprom

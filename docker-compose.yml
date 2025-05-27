@@ -14,7 +14,7 @@ volumes:
 
 secrets:
   watchtower_bearer_token:
-    file: ./secrets/prometheus/watchtower_bearer_token.txt
+    file: ./secrets/watchtower_bearer_token.txt
 
 name: dockprom
 
