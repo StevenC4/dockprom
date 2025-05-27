@@ -210,5 +210,5 @@ services:
     command: daemon --config=/opt/config.ini
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./ofelia/opt:/opt
+      - ./ofelia/main:/opt
     restart: unless-stopped

@@ -38,4 +38,12 @@ services:
           cpus: "0.25"
           memory: "100m"
   
-
+  # Scheduling
+  ofelia-dockprom:
+    container_name: ofelia-dockprom
+    image: mcuadros/ofelia:latest
+    command: daemon --config=/opt/config.ini
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./ofelia/exporters:/opt
+    restart: unless-stopped

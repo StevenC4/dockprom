@@ -104,12 +104,13 @@ echo "# TYPE zfs_pool_scrub_percent_done gauge" >> $METRICS_FILE
 zpool status | awk '
 BEGIN { pool = ""; in_scrub = 0; scrub_pct = 0; }
 /^\s*pool:/ { pool = $2; }
-/^\s*scan:/ { 
+/^\s*scan:/ {
   if ($0 ~ /scrub in progress/) {
     in_scrub = 1;
-    if ($0 ~ /([0-9.]+)%/) {
-      match($0, /([0-9.]+)%/, arr);
-      scrub_pct = arr[1];
+    if ($0 ~ /[0-9.]+%/) {
+      temp = $0
+      gsub(/.*([0-9.]+)%.*/, "\\1", temp)
+      scrub_pct = temp
     }
   } else {
     in_scrub = 0;
