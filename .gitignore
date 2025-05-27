@@ -4,3 +4,5 @@
 .idea/
 .env
 /textfile_collector/*
+/secrets/
+/secrets/*

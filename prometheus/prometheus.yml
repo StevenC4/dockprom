@@ -55,6 +55,16 @@ scrape_configs:
     honor_labels: true
     static_configs:
       - targets: ['pushgateway:9091']
+  
+  - job_name: watchtower
+    scrape_interval: 5s
+    metrics_path: /v1/metrics
+    bearer_token_file: /run/secrets/watchtower_bearer_token
+    static_configs:
+      - targets: ['watchtower:8080']
+        labels:
+          host: 192.168.205.10
+          hostname: mozart
 
 alerting:
   alertmanagers:

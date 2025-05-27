@@ -5,10 +5,16 @@ networks:
     external: true
   smtp-net:
     external: true
+  watchtower-net:
+    external: true
 
 volumes:
     prometheus_data: {}
     grafana_data: {}
+
+secrets:
+  watchtower_bearer_token:
+    file: ./secrets/prometheus/watchtower_bearer_token.txt
 
 name: dockprom
 
@@ -16,6 +22,8 @@ services:
   prometheus:
     image: prom/prometheus:v2.46.0
     container_name: prometheus
+    secrets:
+      - watchtower_bearer_token
     volumes:
       - ./prometheus:/etc/prometheus
       - prometheus_data:/prometheus
@@ -32,6 +40,7 @@ services:
       - 9090
     networks:
       - monitor-net
+      - watchtower-net
     labels:
       org.label-schema.group: "monitoring"
 
