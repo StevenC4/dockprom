@@ -1,0 +1,92 @@
+name: dockprom
+
+networks:
+  monitor-net:
+    name: monitor-net
+  watchtower-net:
+    external: true
+
+secrets:
+  watchtower_bearer_token:
+    file: ./secrets/watchtower_bearer_token.txt
+
+volumes:
+  prometheus_data: {}
+
+services:
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.47.1
+    container_name: cadvisor
+    privileged: true
+    devices:
+      - /dev/kmsg:/dev/kmsg
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker:/var/lib/docker:ro
+      - /cgroup:/cgroup:ro # doesn't work on MacOS only for Linux
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: "100m"
+    restart: unless-stopped
+    expose:
+      - 8080
+    ports:
+      - "8081:8080"
+    networks:
+      - monitor-net
+    labels:
+      org.label-schema.group: "monitoring"
+
+  nodeexporter:
+    image: prom/node-exporter:v1.6.1
+    container_name: nodeexporter
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+      - ./textfile_collector:/textfile_collector:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+      - '--collector.textfile.directory=/textfile_collector'
+    restart: unless-stopped
+    expose:
+      - 9100
+    networks:
+      - monitor-net
+    labels:
+      org.label-schema.group: "monitoring"
+
+  prometheus:
+    image: prom/prometheus:v2.46.0
+    container_name: prometheus
+    secrets:
+      - watchtower_bearer_token
+    volumes:
+      - ./prometheus/${HOSTNAME}:/etc/prometheus
+      - prometheus_data:/prometheus
+      # config override will mount the correct prometheus.yml here
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+      - '--storage.tsdb.retention.time=200h'
+    expose:
+      - 9090
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+    networks:
+      - monitor-net
+      - watchtower-net
+    labels:
+      org.label-schema.group: "monitoring"

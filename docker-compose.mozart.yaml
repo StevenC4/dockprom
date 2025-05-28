@@ -1,49 +1,13 @@
 networks:
-  monitor-net:
-    name: monitor-net
   home-reverse-proxy-net:
     external: true
   smtp-net:
     external: true
-  watchtower-net:
-    external: true
 
 volumes:
-    prometheus_data: {}
-    grafana_data: {}
-
-secrets:
-  watchtower_bearer_token:
-    file: ./secrets/watchtower_bearer_token.txt
-
-name: dockprom
+  grafana_data: {}
 
 services:
-  prometheus:
-    image: prom/prometheus:v2.46.0
-    container_name: prometheus
-    secrets:
-      - watchtower_bearer_token
-    volumes:
-      - ./prometheus:/etc/prometheus
-      - prometheus_data:/prometheus
-    command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/etc/prometheus/console_libraries'
-      - '--web.console.templates=/etc/prometheus/consoles'
-      - '--storage.tsdb.retention.time=200h'
-      - '--web.enable-lifecycle'
-      - '--web.enable-admin-api'
-    restart: unless-stopped
-    expose:
-      - 9090
-    networks:
-      - monitor-net
-      - watchtower-net
-    labels:
-      org.label-schema.group: "monitoring"
-
   alertmanager:
     image: prom/alertmanager:v0.25.0
     container_name: alertmanager
@@ -54,6 +18,8 @@ services:
       - '--storage.path=/alertmanager'
       - "--web.external-url=https://alertmanager.local"
     restart: unless-stopped
+    ports:
+      - "9093:9093"
     expose:
       - 9093
     networks:
@@ -64,60 +30,27 @@ services:
       - org.label-schema.group=monitoring
       - homepage.group=Util
       - homepage.name=Alert Manager
-      # - homepage.icon=emby.png
+      - homepage.icon=alertmanager
       - homepage.href=https://alertmanager.carroll.live
       - homepage.description=Alert Manager client
       - traefik.enable=true
       - traefik.docker.network=home-reverse-proxy-net
       - traefik.http.routers.alertmanager.rule=Host(`alertmanager.carroll.live`)
       - traefik.http.routers.alertmanager.entrypoints=websecure
+      - traefik.http.routers.alertmanager.middlewares=auth
+      - traefik.http.middlewares.auth.basicauth.users=steven:$$2y$$05$$1ZYT5NkVLiQETZI6b86MSOn8TfOrKmkvMZgmf7Rmx2Q2YNsxXOU9a
       - traefik.http.routers.alertmanager.tls.certresolver=carroll_live_dns_resolver
       - traefik.http.services.alertmanager.loadbalancer.server.port=9093
       - coredns.enabled=true
       - coredns.cname.name=alertmanager.carroll.live
       - coredns.cname.value=mozart.carroll.live
 
-  nodeexporter:
-    image: prom/node-exporter:v1.6.1
-    container_name: nodeexporter
-    volumes:
-      - /proc:/host/proc:ro
-      - /sys:/host/sys:ro
-      - /:/rootfs:ro
-      - ./textfile_collector:/textfile_collector:ro
-    command:
-      - '--path.procfs=/host/proc'
-      - '--path.rootfs=/rootfs'
-      - '--path.sysfs=/host/sys'
-      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
-      - '--collector.textfile.directory=/textfile_collector'
-    restart: unless-stopped
-    expose:
-      - 9100
-    networks:
-      - monitor-net
-    labels:
-      org.label-schema.group: "monitoring"
-
   cadvisor:
-    image: gcr.io/cadvisor/cadvisor:v0.47.1
-    container_name: cadvisor
-    privileged: true
-    devices:
-      - /dev/kmsg:/dev/kmsg
-    volumes:
-      - /:/rootfs:ro
-      - /var/run:/var/run:ro
-      - /sys:/sys:ro
-      - /var/lib/docker:/var/lib/docker:ro
-      - /cgroup:/cgroup:ro #doesn't work on MacOS only for Linux
-    restart: unless-stopped
-    expose:
-      - 8080
-    networks:
-      - monitor-net
-    labels:
-      org.label-schema.group: "monitoring"
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: "256m"
 
   grafana:
     image: grafana/grafana:10.0.3
@@ -127,7 +60,7 @@ services:
       - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards
       - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
     env_file:
-      - .env
+      - ./env/grafana.env
     environment:
       - GF_SECURITY_ADMIN_USER=${GF_ADMIN_USER:-admin}
       - GF_SECURITY_ADMIN_PASSWORD=${GF_ADMIN_PASSWORD:-admin}
@@ -135,6 +68,8 @@ services:
     restart: unless-stopped
     expose:
       - 3000
+    ports:
+      - "3001:3000"
     networks:
       - monitor-net
       - home-reverse-proxy-net
@@ -142,7 +77,7 @@ services:
       - org.label-schema.group=monitoring
       - homepage.group=Util
       - homepage.name=Grafana
-      # - homepage.icon=emby.png
+      - homepage.icon=grafana
       - homepage.href=https://grafana.carroll.live
       - homepage.description=Grafana client
       - traefik.enable=true
@@ -155,6 +90,15 @@ services:
       - coredns.cname.name=grafana.carroll.live
       - coredns.cname.value=mozart.carroll.live
 
+  ofelia-dockprom:
+    container_name: ofelia-dockprom
+    image: mcuadros/ofelia:latest
+    command: daemon --config=/opt/config.ini
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./ofelia/mozart:/opt
+    restart: unless-stopped
+
   pushgateway:
     image: prom/pushgateway:v1.6.0
     container_name: pushgateway
@@ -162,35 +106,12 @@ services:
     expose:
       - 9091
     ports:
-      - 9091
+      - "9091:9091"
     networks:
       - monitor-net
     labels:
       org.label-schema.group: "monitoring"
 
-  caddy:
-    image: caddy:2.6.4
-    container_name: caddy
-    ports:
-      - "3001:3000"
-      - "8081:8080"
-      - "9090:9090"
-      - "9093:9093"
-      - "9091:9091"
-    volumes:
-      - ./caddy:/etc/caddy
-    env_file:
-      - .env
-    environment:
-      - ADMIN_USER=${ADMIN_USER:-admin}
-      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin}
-      - ADMIN_PASSWORD_HASH=${ADMIN_PASSWORD_HASH:-$2a$14$1l.IozJx7xQRVmlkEQ32OeEEfP5mRxTpbDTCTcXRqn19gXD8YK1pO}
-    restart: unless-stopped
-    networks:
-      - monitor-net
-    labels:
-      org.label-schema.group: "monitoring"
-  
   zfs-utils:
     container_name: zfs-utils
     build:
@@ -202,13 +123,3 @@ services:
     volumes:
       - /dev:/dev:ro
       - ./textfile_collector:/zfs-metrics
-
-  # Scheduling
-  ofelia-dockprom:
-    container_name: ofelia-dockprom
-    image: mcuadros/ofelia:latest
-    command: daemon --config=/opt/config.ini
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./ofelia/main:/opt
-    restart: unless-stopped

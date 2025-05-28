@@ -1,22 +1,31 @@
 #!make
 include .env
+export
 
-ifeq ("$(EXPORTER_ONLY)", "true")
-	docker-compose-file:=docker-compose.exporters.yml
-else
-	docker-compose-file:=docker-compose.yml
+SHELL := /bin/bash
+HOST_PROFILE := $(HOSTNAME)
+BASE_CONFIG := docker-compose.base.yaml
+HOST_COMPOSE := docker-compose.$(HOST_PROFILE).yaml
+
+DOCKER_COMPOSE_ARGS := -f $(BASE_CONFIG)
+ifneq ("$(wildcard $(HOST_COMPOSE))","")
+	DOCKER_COMPOSE_ARGS += -f $(HOST_COMPOSE)
 endif
 
-.PHONY: up down
+.PHONY: up down pull build config
 
 up:
-	docker compose -f ${docker-compose-file} up -d
+	docker compose $(DOCKER_COMPOSE_ARGS) up -d
 
 down:
-	docker compose -f ${docker-compose-file} down
+	docker compose $(DOCKER_COMPOSE_ARGS) down
 
 pull:
-	docker compose -f ${docker-compose-file} pull
+	docker compose $(DOCKER_COMPOSE_ARGS) pull
 
 build:
-	docker build -t zfs-utils zfs-utils/.
+	docker compose $(DOCKER_COMPOSE_ARGS) build
+
+config:
+	docker compose $(DOCKER_COMPOSE_ARGS) config
+
