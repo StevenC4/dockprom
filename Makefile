@@ -24,7 +24,7 @@ pull:
 	docker compose $(DOCKER_COMPOSE_ARGS) pull
 
 build:
-	docker compose $(DOCKER_COMPOSE_ARGS) build
+	COMPOSE_BAKE=true docker compose $(DOCKER_COMPOSE_ARGS) build
 
 config:
 	docker compose $(DOCKER_COMPOSE_ARGS) config
