@@ -5,8 +5,8 @@ RUN apt-get update && apt-get install -y acl zfsutils-linux
 COPY ./entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-COPY ./gather-metrics.sh /scripts/gather-metrics.sh
-RUN chmod +x /scripts/gather-metrics.sh
+COPY ./gather-zfs-metrics.sh /scripts/gather-zfs-metrics.sh
+RUN chmod +x /scripts/gather-zfs-metrics.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["sleep", "infinity"]
