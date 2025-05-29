@@ -5,7 +5,7 @@ global:
     monitor: mozart
 
 rule_files:
-  "alert.rules"
+  - "alert.rules"
 
 alerting:
   alertmanagers:
@@ -58,7 +58,14 @@ scrape_configs:
     scrape_interval: 15s
     static_configs:
       - targets:
-          - 192.168.201.10: 9090 # pihole
-          - 192.168.201.11: 9090 # wireguard
+          - 192.168.201.10:9090 # pi.hole
         labels:
           source: satellite
+          host: 192.168.201.10
+          hostname: pi.hole
+      - targets:
+          - 192.168.201.11:9090 # wireguard1
+        labels:
+          source: satellite
+          host: 192.168.201.11
+          hostname: wireguard1
