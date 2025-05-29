@@ -69,3 +69,19 @@ scrape_configs:
           source: satellite
           host: 192.168.201.11
           hostname: wireguard1
+  
+  - job_name: 'satellite-federation'
+    scrape_interval: 15s
+    metrics_path: '/federate'
+    params:
+      'match[]':
+        - '{job="cadvisor"}'
+        - '{job="nodeexporter"}'
+        - '{job="watchtower"}'
+        - '{__name__=~"container_.*"}'
+    static_configs:
+      - targets:
+          - '192.168.201.10:9090'  # pi.hole
+          - '192.168.201.11:9090'  # wireguard1
+        labels:
+          source: satellite
