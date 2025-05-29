@@ -4,7 +4,6 @@ services:
     container_name: pihole-exporter
     environment:
       - PIHOLE_HOSTNAME=http://pihole:80
-      - PIHOLE_API_TOKEN=${PIHOLE_API_TOKEN}
     env_file:
       - ./env/pihole-exporter.env
     network_mode: host

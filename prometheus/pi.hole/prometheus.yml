@@ -2,7 +2,7 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
   external_labels:
-    monitor: pihole
+    monitor: pi.hole
 
 scrape_configs:
   - job_name: 'cadvisor'
@@ -11,7 +11,7 @@ scrape_configs:
       - targets: ['cadvisor:8080']
         labels:
           host: 192.168.201.10
-          hostname: pihole
+          hostname: pi.hole
 
   - job_name: 'nodeexporter'
     scrape_interval: 15s
@@ -19,7 +19,7 @@ scrape_configs:
       - targets: ['nodeexporter:9100']
         labels:
           host: 192.168.201.10
-          hostname: pihole
+          hostname: pi.hole
 
   - job_name: 'prometheus'
     scrape_interval: 15s
@@ -27,7 +27,7 @@ scrape_configs:
       - targets: ['prometheus:9090']
         labels:
           host: 192.168.201.10
-          hostname: pihole
+          hostname: pi.hole
 
   - job_name: 'watchtower'
     scrape_interval: 15s
@@ -37,7 +37,7 @@ scrape_configs:
       - targets: ['watchtower:8080']
         labels:
           host: 192.168.201.10
-          hostname: pihole
+          hostname: pi.hole
 
   - job_name: 'pihole'
     scrape_interval: 15s
