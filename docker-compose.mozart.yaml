@@ -42,8 +42,7 @@ services:
       - traefik.http.routers.alertmanager.tls.certresolver=carroll_live_dns_resolver
       - traefik.http.services.alertmanager.loadbalancer.server.port=9093
       - coredns.enabled=true
-      - coredns.cname.name=alertmanager.carroll.live
-      - coredns.cname.value=mozart.carroll.live
+      - coredns.a.name=alertmanager.carroll.live
 
   cadvisor:
     deploy:
@@ -87,8 +86,7 @@ services:
       - traefik.http.routers.grafana.tls.certresolver=carroll_live_dns_resolver
       - traefik.http.services.grafana.loadbalancer.server.port=3000
       - coredns.enabled=true
-      - coredns.cname.name=grafana.carroll.live
-      - coredns.cname.value=mozart.carroll.live
+      - coredns.a.name=grafana.carroll.live
 
   ofelia-dockprom:
     container_name: ofelia-dockprom
