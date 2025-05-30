@@ -1,0 +1,1 @@
+{{ define "email.subject" }}[{{ .Status | toUpper }}] {{ .CommonLabels.alertname }} on {{ .CommonLabels.hostname }}{{ end }}

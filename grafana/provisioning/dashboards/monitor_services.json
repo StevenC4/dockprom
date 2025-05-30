@@ -75,7 +75,7 @@
       "tableColumn": "",
       "targets": [
         {
-          "expr": "(time() - process_start_time_seconds{instance=\"localhost:9090\",job=\"prometheus\"})",
+          "expr": "(time() - process_start_time_seconds{instance=\"localhost:9090\",job=\"prometheus\",hostname=~\"$hostname\"})",
           "interval": "10s",
           "intervalFactor": 1,
           "legendFormat": "",
@@ -163,7 +163,7 @@
       "tableColumn": "",
       "targets": [
         {
-          "expr": "sum(container_memory_usage_bytes{container_label_org_label_schema_group=\"monitoring\"})",
+          "expr": "sum(container_memory_usage_bytes{container_label_org_label_schema_group=\"monitoring\",hostname=~\"$hostname\"})",
           "format": "time_series",
           "interval": "10s",
           "intervalFactor": 1,
@@ -251,7 +251,7 @@
       "tableColumn": "",
       "targets": [
         {
-          "expr": "prometheus_tsdb_head_chunks",
+          "expr": "prometheus_tsdb_head_chunks{hostname=~\"$hostname\"}",
           "interval": "10s",
           "intervalFactor": 1,
           "refId": "A",
@@ -337,7 +337,7 @@
       "tableColumn": "",
       "targets": [
         {
-          "expr": "prometheus_tsdb_head_series",
+          "expr": "prometheus_tsdb_head_series{hostname=~\"$hostname\"}",
           "interval": "10s",
           "intervalFactor": 1,
           "refId": "A",
@@ -402,7 +402,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "sum by (name) (rate(container_cpu_user_seconds_total{container_label_org_label_schema_group=\"monitoring\"}[1m]) * 100  / scalar(count(node_cpu{mode=\"user\"})))",
+          "expr": "sum by (name) (rate(container_cpu_user_seconds_total{container_label_org_label_schema_group=\"monitoring\",hostname=~\"$hostname\"}[1m]) * 100  / scalar(count(node_cpu{mode=\"user\",hostname=~\"$hostname\"})))",
           "format": "time_series",
           "hide": true,
           "intervalFactor": 10,
@@ -411,7 +411,7 @@
           "step": 10
         },
         {
-          "expr": "sum by (name) (rate(container_cpu_user_seconds_total{container_label_org_label_schema_group=\"monitoring\"}[1m]) * 100  / scalar(count(node_cpu_seconds_total{mode=\"user\"})))",
+          "expr": "sum by (name) (rate(container_cpu_user_seconds_total{container_label_org_label_schema_group=\"monitoring\",hostname=~\"$hostname\"}[1m]) * 100  / scalar(count(node_cpu_seconds_total{mode=\"user\",hostname=~\"$hostname\"})))",
           "format": "time_series",
           "intervalFactor": 10,
           "legendFormat": "{{ name }}",
@@ -502,7 +502,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "sum by (name) (container_memory_usage_bytes{container_label_org_label_schema_group=\"monitoring\"})",
+          "expr": "sum by (name) (container_memory_usage_bytes{container_label_org_label_schema_group=\"monitoring\",hostname=~\"$hostname\"})",
           "format": "time_series",
           "interval": "",
           "intervalFactor": 10,
@@ -596,7 +596,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "sum(ALERTS{alertstate=\"firing\"}) by (alertname)",
+          "expr": "sum(ALERTS{alertstate=\"firing\",hostname=~\"$hostname\"}) by (alertname)",
           "format": "time_series",
           "interval": "30s",
           "intervalFactor": 1,
@@ -702,14 +702,14 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "process_max_fds{job=\"prometheus\"}",
+          "expr": "process_max_fds{job=\"prometheus\",hostname=~\"$hostname\"}",
           "format": "time_series",
           "intervalFactor": 1,
           "legendFormat": "Max",
           "refId": "A"
         },
         {
-          "expr": "process_open_fds{job=\"prometheus\"}",
+          "expr": "process_open_fds{job=\"prometheus\",hostname=~\"$hostname\"}",
           "format": "time_series",
           "intervalFactor": 1,
           "legendFormat": "Open",
@@ -813,7 +813,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "process_resident_memory_bytes{job=\"prometheus\"}",
+          "expr": "process_resident_memory_bytes{job=\"prometheus\",hostname=~\"$hostname\"}",
           "format": "time_series",
           "intervalFactor": 2,
           "legendFormat": "RSS",
@@ -822,7 +822,7 @@
           "step": 10
         },
         {
-          "expr": "prometheus_local_storage_target_heap_size_bytes{job=\"prometheus\"}",
+          "expr": "prometheus_local_storage_target_heap_size_bytes{job=\"prometheus\",hostname=~\"$hostname\"}",
           "format": "time_series",
           "intervalFactor": 2,
           "legendFormat": "Target heap size",
@@ -831,7 +831,7 @@
           "step": 10
         },
         {
-          "expr": "go_memstats_next_gc_bytes{job=\"prometheus\"}",
+          "expr": "go_memstats_next_gc_bytes{job=\"prometheus\",hostname=~\"$hostname\"}",
           "format": "time_series",
           "intervalFactor": 2,
           "legendFormat": "Next GC",
@@ -840,7 +840,7 @@
           "step": 10
         },
         {
-          "expr": "go_memstats_alloc_bytes{job=\"prometheus\"}",
+          "expr": "go_memstats_alloc_bytes{job=\"prometheus\",hostname=~\"$hostname\"}",
           "format": "time_series",
           "intervalFactor": 2,
           "legendFormat": "Allocated",
@@ -937,7 +937,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(go_memstats_alloc_bytes_total{job=\"prometheus\"}[1m])",
+          "expr": "rate(go_memstats_alloc_bytes_total{job=\"prometheus\",hostname=~\"$hostname\"}[1m])",
           "format": "time_series",
           "intervalFactor": 2,
           "legendFormat": "Allocated",
@@ -1033,7 +1033,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "prometheus_tsdb_head_series",
+          "expr": "prometheus_tsdb_head_series{hostname=~\"$hostname\"}",
           "format": "time_series",
           "intervalFactor": 2,
           "legendFormat": "Time series",
@@ -1128,7 +1128,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "prometheus_tsdb_head_active_appenders",
+          "expr": "prometheus_tsdb_head_active_appenders{hostname=~\"$hostname\"}",
           "format": "time_series",
           "intervalFactor": 2,
           "legendFormat": "Head Appenders",
@@ -1220,7 +1220,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(prometheus_tsdb_head_samples_appended_total[1m])",
+          "expr": "rate(prometheus_tsdb_head_samples_appended_total{hostname=~\"$hostname\"}[1m])",
           "format": "time_series",
           "intervalFactor": 2,
           "legendFormat": "Samples",
@@ -1321,7 +1321,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "prometheus_tsdb_head_chunks",
+          "expr": "prometheus_tsdb_head_chunks{hostname=~\"$hostname\"}",
           "format": "time_series",
           "intervalFactor": 2,
           "legendFormat": "Chunks",
@@ -1416,7 +1416,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(prometheus_tsdb_head_chunks_created_total[1m])",
+          "expr": "rate(prometheus_tsdb_head_chunks_created_total{hostname=~\"$hostname\"}[1m])",
           "format": "time_series",
           "intervalFactor": 2,
           "legendFormat": "Created",
@@ -1512,7 +1512,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(prometheus_tsdb_head_chunks_removed_total[1m])",
+          "expr": "rate(prometheus_tsdb_head_chunks_removed_total{hostname=~\"$hostname\"}[1m])",
           "format": "time_series",
           "intervalFactor": 2,
           "legendFormat": "Removed",
@@ -1616,7 +1616,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "prometheus_tsdb_head_min_time",
+          "expr": "prometheus_tsdb_head_min_time{hostname=~\"$hostname\"}",
           "format": "time_series",
           "intervalFactor": 2,
           "legendFormat": "Min",
@@ -1633,7 +1633,7 @@
           "refId": "C"
         },
         {
-          "expr": "prometheus_tsdb_head_max_time",
+          "expr": "prometheus_tsdb_head_max_time{hostname=~\"$hostname\"}",
           "format": "time_series",
           "intervalFactor": 2,
           "legendFormat": "Max",
@@ -1729,7 +1729,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(prometheus_tsdb_head_gc_duration_seconds_sum[1m])",
+          "expr": "rate(prometheus_tsdb_head_gc_duration_seconds_sum{hostname=~\"$hostname\"}[1m])",
           "format": "time_series",
           "intervalFactor": 2,
           "legendFormat": "GC Time",
@@ -1829,7 +1829,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "prometheus_tsdb_blocks_loaded",
+          "expr": "prometheus_tsdb_blocks_loaded{hostname=~\"$hostname\"}",
           "format": "time_series",
           "intervalFactor": 2,
           "legendFormat": "Blocks Loaded",
@@ -1926,7 +1926,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(prometheus_tsdb_reloads_total[10m])",
+          "expr": "rate(prometheus_tsdb_reloads_total{hostname=~\"$hostname\"}[10m])",
           "format": "time_series",
           "interval": "",
           "intervalFactor": 2,
@@ -2024,7 +2024,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(prometheus_tsdb_wal_corruptions_total[10m])",
+          "expr": "rate(prometheus_tsdb_wal_corruptions_total{hostname=~\"$hostname\"}[10m])",
           "format": "time_series",
           "interval": "",
           "intervalFactor": 2,
@@ -2034,7 +2034,7 @@
           "step": 10
         },
         {
-          "expr": "rate(prometheus_tsdb_reloads_failures_total[10m])",
+          "expr": "rate(prometheus_tsdb_reloads_failures_total{hostname=~\"$hostname\"}[10m])",
           "format": "time_series",
           "interval": "",
           "intervalFactor": 2,
@@ -2044,7 +2044,7 @@
           "step": 10
         },
         {
-          "expr": "rate(prometheus_tsdb_head_series_not_found[10m])",
+          "expr": "rate(prometheus_tsdb_head_series_not_found{hostname=~\"$hostname\"}[10m])",
           "format": "time_series",
           "interval": "",
           "intervalFactor": 2,
@@ -2054,7 +2054,7 @@
           "step": 10
         },
         {
-          "expr": "rate(prometheus_tsdb_compactions_failed_total[10m])",
+          "expr": "rate(prometheus_tsdb_compactions_failed_total{hostname=~\"$hostname\"}[10m])",
           "format": "time_series",
           "interval": "",
           "intervalFactor": 2,
@@ -2064,7 +2064,7 @@
           "step": 10
         },
         {
-          "expr": "rate(prometheus_tsdb_retention_cutoffs_failures_total[10m])",
+          "expr": "rate(prometheus_tsdb_retention_cutoffs_failures_total{hostname=~\"$hostname\"}[10m])",
           "format": "time_series",
           "interval": "",
           "intervalFactor": 2,
@@ -2161,7 +2161,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(prometheus_tsdb_wal_fsync_duration_seconds_sum[1m]) / rate(prometheus_tsdb_wal_fsync_duration_seconds_count[1m])",
+          "expr": "rate(prometheus_tsdb_wal_fsync_duration_seconds_sum{hostname=~\"$hostname\"}[1m]) / rate(prometheus_tsdb_wal_fsync_duration_seconds_count{hostname=~\"$hostname\"}[1m])",
           "format": "time_series",
           "interval": "",
           "intervalFactor": 2,
@@ -2171,7 +2171,7 @@
           "step": 10
         },
         {
-          "expr": "rate(prometheus_tsdb_wal_truncate_duration_seconds_sum[1m]) / rate(prometheus_tsdb_wal_truncate_duration_seconds_count[1m])",
+          "expr": "rate(prometheus_tsdb_wal_truncate_duration_seconds_sum{hostname=~\"$hostname\"}[1m]) / rate(prometheus_tsdb_wal_truncate_duration_seconds_count{hostname=~\"$hostname\"}[1m])",
           "format": "time_series",
           "interval": "",
           "intervalFactor": 2,
@@ -2268,7 +2268,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(prometheus_tsdb_compactions_total[10m])",
+          "expr": "rate(prometheus_tsdb_compactions_total{hostname=~\"$hostname\"}[10m])",
           "format": "time_series",
           "interval": "",
           "intervalFactor": 2,
@@ -2364,7 +2364,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(prometheus_tsdb_compaction_duration_seconds_sum[10m])",
+          "expr": "rate(prometheus_tsdb_compaction_duration_seconds_sum{hostname=~\"$hostname\"}[10m])",
           "format": "time_series",
           "intervalFactor": 2,
           "legendFormat": "Compaction Time",
@@ -2461,7 +2461,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(prometheus_tsdb_retention_cutoffs_total[10m])",
+          "expr": "rate(prometheus_tsdb_retention_cutoffs_total{hostname=~\"$hostname\"}[10m])",
           "format": "time_series",
           "intervalFactor": 2,
           "legendFormat": "Retention Cutoffs",
@@ -2556,7 +2556,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(prometheus_tsdb_compaction_chunk_samples_sum[10m]) / rate(prometheus_tsdb_compaction_chunk_samples_count[10m])",
+          "expr": "rate(prometheus_tsdb_compaction_chunk_samples_sum{hostname=~\"$hostname\"}[10m]) / rate(prometheus_tsdb_compaction_chunk_samples_count{hostname=~\"$hostname\"}[10m])",
           "format": "time_series",
           "intervalFactor": 2,
           "legendFormat": "Chunk Samples",
@@ -2647,7 +2647,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(prometheus_target_interval_length_seconds_count[5m])",
+          "expr": "rate(prometheus_target_interval_length_seconds_count{hostname=~\"$hostname\"}[5m])",
           "format": "time_series",
           "intervalFactor": 2,
           "legendFormat": "{{ interval }}",
@@ -2737,7 +2737,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "prometheus_target_interval_length_seconds{quantile!=\"0.01\", quantile!=\"0.05\"}",
+          "expr": "prometheus_target_interval_length_seconds{quantile!=\"0.01\", quantile!=\"0.05\",hostname=~\"$hostname\"}",
           "format": "time_series",
           "intervalFactor": 2,
           "legendFormat": "{{quantile}} ({{interval}})",
@@ -2832,7 +2832,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(prometheus_http_request_duration_seconds_count[1m])",
+          "expr": "rate(prometheus_http_request_duration_seconds_count{hostname=~\"$hostname\"}[1m])",
           "format": "time_series",
           "intervalFactor": 2,
           "legendFormat": "{{handler}}",
@@ -2928,7 +2928,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(prometheus_http_request_duration_seconds_sum[1m]) / rate(prometheus_http_request_duration_seconds_count[1m])",
+          "expr": "rate(prometheus_http_request_duration_seconds_sum{hostname=~\"$hostname\"}[1m]) / rate(prometheus_http_request_duration_seconds_count{hostname=~\"$hostname\"}[1m])",
           "format": "time_series",
           "intervalFactor": 2,
           "legendFormat": "{{handler}}",
@@ -3023,7 +3023,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(prometheus_http_request_duration_seconds_sum[1m])",
+          "expr": "rate(prometheus_http_request_duration_seconds_sum{hostname=~\"$hostname\"}[1m])",
           "format": "time_series",
           "intervalFactor": 2,
           "legendFormat": "{{handler}}",
@@ -3119,7 +3119,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(prometheus_engine_query_duration_seconds_sum[1m])",
+          "expr": "rate(prometheus_engine_query_duration_seconds_sum{hostname=~\"$hostname\"}[1m])",
           "format": "time_series",
           "intervalFactor": 2,
           "legendFormat": "{{slice}}",
@@ -3214,7 +3214,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(prometheus_rule_group_iterations_missed_total[1m])  ",
+          "expr": "rate(prometheus_rule_group_iterations_missed_total{hostname=~\"$hostname\"}[1m])  ",
           "format": "time_series",
           "intervalFactor": 2,
           "legendFormat": "Rule group missed",
@@ -3223,7 +3223,7 @@
           "step": 10
         },
         {
-          "expr": "rate(prometheus_rule_evaluation_failures_total[1m])",
+          "expr": "rate(prometheus_rule_evaluation_failures_total{hostname=~\"$hostname\"}[1m])",
           "format": "time_series",
           "intervalFactor": 2,
           "legendFormat": "Rule evals failed",
@@ -3318,7 +3318,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "rate(prometheus_rule_group_duration_seconds_sum[1m])",
+          "expr": "rate(prometheus_rule_group_duration_seconds_sum{hostname=~\"$hostname\"}[1m])",
           "format": "time_series",
           "intervalFactor": 2,
           "legendFormat": "Rule evaluation duration",
@@ -3399,7 +3399,26 @@
     ]
   },
   "templating": {
-    "list": []
+    "list": [
+      {
+        "name": "hostname",
+        "type": "query",
+        "datasource": "Prometheus",
+        "refresh": 2,
+        "query": "label_values(node_uname_info, hostname)",
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "sort": 1,
+        "label": "Hostname",
+        "hide": 0,
+        "regex": "",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      }
+    ]
   },
   "annotations": {
     "list": []

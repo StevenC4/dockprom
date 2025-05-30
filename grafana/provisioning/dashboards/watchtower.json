@@ -22,7 +22,7 @@
       "datasource": "Prometheus",
       "targets": [
         {
-          "expr": "watchtower_containers_scanned",
+          "expr": "watchtower_containers_scanned{hostname=~\"$hostname\"}",
           "refId": "A",
           "legendFormat": "{{hostname}}",
           "instant": true
@@ -74,7 +74,7 @@
       "datasource": "Prometheus",
       "targets": [
         {
-          "expr": "watchtower_containers_updated",
+          "expr": "watchtower_containers_updated{hostname=~\"$hostname\"}",
           "refId": "A",
           "legendFormat": "{{hostname}}",
           "instant": true
@@ -126,7 +126,7 @@
       "datasource": "Prometheus",
       "targets": [
         {
-          "expr": "watchtower_containers_failed",
+          "expr": "watchtower_containers_failed{hostname=~\"$hostname\"}",
           "refId": "A",
           "legendFormat": "{{hostname}}",
           "instant": true
@@ -182,7 +182,7 @@
       "datasource": "Prometheus",
       "targets": [
         {
-          "expr": "watchtower_scans_total",
+          "expr": "watchtower_scans_total{hostname=~\"$hostname\"}",
           "refId": "A",
           "legendFormat": "{{hostname}}",
           "instant": true
@@ -247,7 +247,7 @@
       "datasource": "Prometheus",
       "targets": [
         {
-          "expr": "go_memstats_heap_alloc_bytes",
+          "expr": "go_memstats_heap_alloc_bytes{hostname=~\"$hostname\"}",
           "refId": "A",
           "instant": true
         }
@@ -298,7 +298,7 @@
       "datasource": "Prometheus",
       "targets": [
         {
-          "expr": "go_goroutines",
+          "expr": "go_goroutines{hostname=~\"$hostname\"}",
           "refId": "A",
           "instant": true
         }
@@ -357,7 +357,7 @@
       "datasource": "Prometheus",
       "targets": [
         {
-          "expr": "process_resident_memory_bytes",
+          "expr": "process_resident_memory_bytes{hostname=~\"$hostname\"}",
           "refId": "A",
           "instant": true
         }
@@ -412,7 +412,26 @@
     "docker"
   ],
   "templating": {
-    "list": []
+    "list": [
+      {
+        "name": "hostname",
+        "type": "query",
+        "datasource": "Prometheus",
+        "refresh": 2,
+        "query": "label_values(node_uname_info, hostname)",
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "sort": 1,
+        "label": "Hostname",
+        "hide": 0,
+        "regex": "",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      }
+    ]
   },
   "time": {
     "from": "now-15m",
