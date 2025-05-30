@@ -10,15 +10,9 @@ route:
     receiver: 'email'
     repeat_interval: 2h
 
-templates:
-  - '/etc/alertmanager/email.tmpl'
-
 receivers:
   - name: 'email'
     email_configs:
     - to: 'stevencarroll90@gmail.com'
       from: 'alertmanager@stevenc4.com'
       smarthost: 'smtpd:25'
-      headers:
-        Subject: '{{ template "email.subject" . }}'
-      text: '{{ template "email.text" . }}'
