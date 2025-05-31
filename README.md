@@ -341,7 +341,7 @@ First perform a `docker-compose down` then modify your docker-compose.yml to inc
     networks:
       - monitor-net
     labels:
-      org.label-schema.group: "monitoring"
+      monitor_group: monitoring
 ```
 
 Perform a `docker-compose up -d` and then issue the following commands:
@@ -379,5 +379,5 @@ To run the grafana container as `user: 104` change your `docker-compose.yml` lik
     networks:
       - monitor-net
     labels:
-      org.label-schema.group: "monitoring"
+      monitor_group: monitoring
 ```

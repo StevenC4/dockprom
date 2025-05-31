@@ -27,7 +27,7 @@ services:
       - monitor-net
       - smtp-net
     labels:
-      - org.label-schema.group=monitoring
+      - monitor_group=monitoring
       - homepage.group=Util
       - homepage.name=Alert Manager
       - homepage.icon=alertmanager
@@ -73,7 +73,7 @@ services:
       - monitor-net
       - home-reverse-proxy-net
     labels:
-      - org.label-schema.group=monitoring
+      - monitor_group=monitoring
       - homepage.group=Util
       - homepage.name=Grafana
       - homepage.icon=grafana
@@ -108,7 +108,7 @@ services:
     networks:
       - monitor-net
     labels:
-      org.label-schema.group: "monitoring"
+      monitor_group: monitoring
 
   zfs-utils:
     container_name: zfs-utils

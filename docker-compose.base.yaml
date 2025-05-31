@@ -26,6 +26,11 @@ services:
       - /sys:/sys:ro
       - /var/lib/docker:/var/lib/docker:ro
       - /cgroup:/cgroup:ro # doesn't work on MacOS only for Linux
+    command: 
+    - "--docker_only=true"
+    - "--housekeeping_interval=15s"
+    - "--store_container_labels=true"
+    - "--whitelisted_container_labels=monitor_group"
     deploy:
       resources:
         limits:
@@ -39,7 +44,7 @@ services:
     networks:
       - monitor-net
     labels:
-      org.label-schema.group: "monitoring"
+      monitor_group: monitoring
 
   nodeexporter:
     image: prom/node-exporter:v1.6.1
@@ -61,7 +66,7 @@ services:
     networks:
       - monitor-net
     labels:
-      org.label-schema.group: "monitoring"
+      monitor_group: monitoring
 
   prometheus:
     image: prom/prometheus:v2.46.0
@@ -89,4 +94,12 @@ services:
       - monitor-net
       - watchtower-net
     labels:
-      org.label-schema.group: "monitoring"
+      monitor_group: monitoring
+      traefik.enable: true
+      traefik.docker.network: home-reverse-proxy-net
+      traefik.http.routers.prometheus.rule: "Host(`prometheus.${TRAEFIK_HOSTNAME}.carroll.live`)"
+      traefik.http.routers.prometheus.entrypoints: websecure
+      traefik.http.routers.prometheus.tls.certresolver: carroll_live_dns_resolver
+      traefik.http.services.prometheus.loadbalancer.server.port: 9090
+      coredns.enabled: true
+      coredns.a.name: "prometheus.${TRAEFIK_HOSTNAME}.carroll.live"
