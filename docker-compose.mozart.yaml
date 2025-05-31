@@ -1,6 +1,4 @@
 networks:
-  home-reverse-proxy-net:
-    external: true
   smtp-net:
     external: true
 

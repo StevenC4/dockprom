@@ -1,7 +1,3 @@
-networks:
-  home-reverse-proxy-net:
-    external: true
-
 services:
   pihole-exporter:
     image: ekofr/pihole-exporter:latest
