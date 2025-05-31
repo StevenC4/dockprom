@@ -91,6 +91,7 @@ services:
       - "9090:9090"
     restart: unless-stopped
     networks:
+      - home-reverse-proxy-net
       - monitor-net
       - watchtower-net
     labels:
