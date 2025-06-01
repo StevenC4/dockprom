@@ -57,6 +57,15 @@ scrape_configs:
           host: 192.168.201.10
           hostname: pi.hole
 
+  - job_name: 'unbound'
+    scrape_interval: 15s
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['192.168.201.10:9167']
+        labels:
+          host: 192.168.201.10
+          hostname: pi.hole
+
   - job_name: 'etcd'
     scrape_interval: 15s
     metrics_path: /metrics
