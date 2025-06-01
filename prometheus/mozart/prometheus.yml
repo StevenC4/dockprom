@@ -80,10 +80,7 @@ scrape_configs:
     metrics_path: '/federate'
     params:
       'match[]':
-        - '{job="cadvisor"}'
-        - '{job="nodeexporter"}'
-        - '{job="watchtower"}'
-        - '{__name__=~"container_.*"}'
+        - '{job=~".*"}'
     metric_relabel_configs:
       - source_labels: [job]
         target_label: original_job
