@@ -3,7 +3,9 @@ services:
     image: ekofr/pihole-exporter:latest
     container_name: pihole-exporter
     environment:
-      - PIHOLE_HOSTNAME=http://pihole:80
+      - PIHOLE_PROTOCOL=http
+      - PIHOLE_HOSTNAME=192.168.201.10
+      - PIHOLE_PORT=8080
     env_file:
       - ./env/pihole-exporter.env
     network_mode: host
