@@ -1,6 +1,8 @@
 name: dockprom
 
 networks:
+  home-reverse-proxy-net:
+    external: true
   monitor-net:
     name: monitor-net
   watchtower-net:
