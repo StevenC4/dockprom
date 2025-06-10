@@ -1,22 +1,8 @@
+networks:
+  dns-exporter-net:
+    external: true
+
 services:
-  pihole-exporter:
-    image: ekofr/pihole-exporter:latest
-    container_name: pihole-exporter
-    environment:
-      - PIHOLE_PROTOCOL=http
-      - PIHOLE_HOSTNAME=192.168.201.10
-      - PIHOLE_PORT=8080
-    env_file:
-      - ./env/pihole-exporter.env
-    network_mode: host
-    restart: unless-stopped
-  
-  unbound-exporter:
-    image: "ghcr.io/cyb3r-jak3/unbound-exporter:latest"
-    container_name: unbound-exporter
-    command: [ "-unbound.host=unix:///var/run/unbound/unbound.ctl" ]
-    volumes:
-      - /run/unbound:/var/run/unbound:ro
-    ports:
-      - "9167:9167"
-    restart: unless-stopped
+  prometheus:
+    networks:
+      - dns-exporter-net

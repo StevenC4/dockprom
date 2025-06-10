@@ -96,6 +96,8 @@ services:
       - home-reverse-proxy-net
       - monitor-net
       - watchtower-net
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     labels:
       monitor_group: monitoring
       traefik.enable: true
