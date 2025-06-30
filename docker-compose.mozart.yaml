@@ -119,6 +119,5 @@ services:
     volumes:
       - /dev:/dev:ro
       - ./textfile_collector:/zfs-metrics
-    command: --no-pull
     labels:
       - com.centurylinklabs.watchtower.enable=false
