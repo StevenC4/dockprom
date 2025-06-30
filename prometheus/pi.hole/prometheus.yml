@@ -43,7 +43,7 @@ scrape_configs:
     scrape_interval: 15s
     metrics_path: /metrics
     static_configs:
-      - targets: ['192.168.201.10:9617']
+      - targets: ['pihole-exporter.:9617']
         labels:
           host: 192.168.201.10
           hostname: pi.hole
@@ -52,7 +52,16 @@ scrape_configs:
     scrape_interval: 15s
     metrics_path: /metrics
     static_configs:
-      - targets: ['192.168.201.10:9153']
+      - targets: ['host.docker.internal:9153']
+        labels:
+          host: 192.168.201.10
+          hostname: pi.hole
+
+  - job_name: 'unbound'
+    scrape_interval: 15s
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['unbound-exporter.:9167']
         labels:
           host: 192.168.201.10
           hostname: pi.hole
@@ -61,7 +70,7 @@ scrape_configs:
     scrape_interval: 15s
     metrics_path: /metrics
     static_configs:
-      - targets: ['192.168.201.10:2381']
+      - targets: ['host.docker.internal:2381']
         labels:
           host: 192.168.201.10
           hostname: pi.hole
