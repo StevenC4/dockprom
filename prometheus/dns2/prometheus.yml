@@ -1,0 +1,76 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    monitor: dns2
+
+scrape_configs:
+  - job_name: 'cadvisor'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['cadvisor:8080']
+        labels:
+          host: 192.168.202.36
+          hostname: dns2
+
+  - job_name: 'nodeexporter'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['nodeexporter:9100']
+        labels:
+          host: 192.168.202.36
+          hostname: dns2
+
+  - job_name: 'prometheus'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['prometheus:9090']
+        labels:
+          host: 192.168.202.36
+          hostname: dns2
+
+  - job_name: 'watchtower'
+    scrape_interval: 15s
+    metrics_path: /v1/metrics
+    bearer_token_file: /run/secrets/watchtower_bearer_token
+    static_configs:
+      - targets: ['watchtower:8080']
+        labels:
+          host: 192.168.202.36
+          hostname: dns2
+
+  - job_name: 'pihole'
+    scrape_interval: 15s
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['pihole-exporter.:9617']
+        labels:
+          host: 192.168.202.36
+          hostname: dns2
+  
+  - job_name: 'coredns'
+    scrape_interval: 15s
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['host.docker.internal:9153']
+        labels:
+          host: 192.168.202.36
+          hostname: dns2
+
+  - job_name: 'unbound'
+    scrape_interval: 15s
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['unbound-exporter.:9167']
+        labels:
+          host: 192.168.202.36
+          hostname: dns2
+
+  - job_name: 'etcd'
+    scrape_interval: 15s
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['host.docker.internal:2381']
+        labels:
+          host: 192.168.202.36
+          hostname: dns2
