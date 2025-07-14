@@ -3,7 +3,7 @@ include .env
 export
 
 SHELL := /bin/bash
-HOST_PROFILE := $(HOSTNAME)
+HOST_PROFILE := $(if $(ROLE),$(ROLE),$(HOSTNAME))
 BASE_CONFIG := docker-compose.base.yaml
 HOST_COMPOSE := docker-compose.$(HOST_PROFILE).yaml
 
