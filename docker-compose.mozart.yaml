@@ -33,14 +33,15 @@ services:
       - homepage.description=Alert Manager client
       - traefik.enable=true
       - traefik.docker.network=home-reverse-proxy-net
-      - traefik.http.routers.alertmanager.rule=Host(`alertmanager.carroll.live`)
+      - traefik.http.routers.alertmanager.rule=Host(`alertmanager.carroll.live`) || Host(`alertmanager.stevenc4.com`)
       - traefik.http.routers.alertmanager.entrypoints=websecure
       - traefik.http.routers.alertmanager.middlewares=auth
       - traefik.http.middlewares.auth.basicauth.users=steven:$$2y$$05$$1ZYT5NkVLiQETZI6b86MSOn8TfOrKmkvMZgmf7Rmx2Q2YNsxXOU9a
       - traefik.http.routers.alertmanager.tls.certresolver=carroll_live_dns_resolver
       - traefik.http.services.alertmanager.loadbalancer.server.port=9093
       - coredns.enabled=true
-      - coredns.a.name=alertmanager.carroll.live
+      - coredns.a.1.name=alertmanager.carroll.live
+      - coredns.a.2.name=alertmanager.stevenc4.com
 
   cadvisor:
     deploy:
@@ -79,12 +80,13 @@ services:
       - homepage.description=Grafana client
       - traefik.enable=true
       - traefik.docker.network=home-reverse-proxy-net
-      - traefik.http.routers.grafana.rule=Host(`grafana.carroll.live`)
+      - traefik.http.routers.grafana.rule=Host(`grafana.carroll.live`) || Host(`grafana.stevenc4.com`)
       - traefik.http.routers.grafana.entrypoints=websecure
       - traefik.http.routers.grafana.tls.certresolver=carroll_live_dns_resolver
       - traefik.http.services.grafana.loadbalancer.server.port=3000
       - coredns.enabled=true
-      - coredns.a.name=grafana.carroll.live
+      - coredns.a.1.name=grafana.carroll.live
+      - coredns.a.2.name=grafana.stevenc4.com
 
   ofelia-dockprom:
     container_name: ofelia-dockprom

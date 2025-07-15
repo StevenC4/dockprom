@@ -102,10 +102,11 @@ services:
       monitor_group: monitoring
       traefik.enable: true
       traefik.docker.network: home-reverse-proxy-net
-      traefik.http.routers.prometheus.rule: "Host(`prometheus.${TRAEFIK_HOSTNAME}.carroll.live`)"
+      traefik.http.routers.prometheus.rule: Host(`prometheus.${TRAEFIK_HOSTNAME}.carroll.live`) || Host(`prometheus.${TRAEFIK_HOSTNAME}.stevenc4.com`)
       traefik.http.routers.prometheus.entrypoints: websecure
       traefik.http.routers.prometheus.tls.certresolver: carroll_live_dns_resolver
       traefik.http.routers.prometheus.middlewares: secure-headers@file
       traefik.http.services.prometheus.loadbalancer.server.port: 9090
       coredns.enabled: true
-      coredns.a.name: "prometheus.${TRAEFIK_HOSTNAME}.carroll.live"
+      coredns.a.1.name: "prometheus.${TRAEFIK_HOSTNAME}.carroll.live"
+      coredns.a.2.name: "prometheus.${TRAEFIK_HOSTNAME}.stevenc4.com"
