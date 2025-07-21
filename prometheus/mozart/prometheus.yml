@@ -63,28 +63,28 @@ scrape_configs:
         target_label: job
     static_configs:
       - targets:
-          - 192.168.202.35:9090 # pi.hole
-        labels:
-          source: satellite
-          host: 192.168.202.35
-          hostname: dns1
-      - targets:
-          - 192.168.202.36:9090 # pi.hole
-        labels:
-          source: satellite
-          host: 192.168.202.36
-          hostname: dns2
-      - targets:
           - 192.168.201.10:9090 # pi.hole
         labels:
           source: satellite
           host: 192.168.201.10
-          hostname: pi.hole
+          hostname: dns1
       - targets:
-          - 192.168.201.11:9090 # wireguard1
+          - 192.168.201.11:9090 # pi.hole
         labels:
           source: satellite
           host: 192.168.201.11
+          hostname: dns2
+      - targets:
+          - 192.168.201.12:9090 # pi.hole
+        labels:
+          source: satellite
+          host: 192.168.201.12
+          hostname: dns2
+      - targets:
+          - 192.168.201.20:9090 # wireguard1
+        labels:
+          source: satellite
+          host: 192.168.201.20
           hostname: wireguard1
   
   - job_name: 'satellite-federation'

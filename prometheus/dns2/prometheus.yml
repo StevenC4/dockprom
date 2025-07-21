@@ -10,7 +10,7 @@ scrape_configs:
     static_configs:
       - targets: ['cadvisor:8080']
         labels:
-          host: 192.168.202.36
+          host: 192.168.201.11
           hostname: dns2
 
   - job_name: 'nodeexporter'
@@ -18,7 +18,7 @@ scrape_configs:
     static_configs:
       - targets: ['nodeexporter:9100']
         labels:
-          host: 192.168.202.36
+          host: 192.168.201.11
           hostname: dns2
 
   - job_name: 'prometheus'
@@ -26,7 +26,7 @@ scrape_configs:
     static_configs:
       - targets: ['prometheus:9090']
         labels:
-          host: 192.168.202.36
+          host: 192.168.201.11
           hostname: dns2
 
   - job_name: 'watchtower'
@@ -36,7 +36,7 @@ scrape_configs:
     static_configs:
       - targets: ['watchtower:8080']
         labels:
-          host: 192.168.202.36
+          host: 192.168.201.11
           hostname: dns2
 
   - job_name: 'pihole'
@@ -45,7 +45,7 @@ scrape_configs:
     static_configs:
       - targets: ['pihole-exporter.:9617']
         labels:
-          host: 192.168.202.36
+          host: 192.168.201.11
           hostname: dns2
   
   - job_name: 'coredns'
@@ -54,7 +54,7 @@ scrape_configs:
     static_configs:
       - targets: ['host.docker.internal:9153']
         labels:
-          host: 192.168.202.36
+          host: 192.168.201.11
           hostname: dns2
 
   - job_name: 'unbound'
@@ -63,7 +63,7 @@ scrape_configs:
     static_configs:
       - targets: ['unbound-exporter.:9167']
         labels:
-          host: 192.168.202.36
+          host: 192.168.201.11
           hostname: dns2
 
   - job_name: 'etcd'
@@ -72,5 +72,5 @@ scrape_configs:
     static_configs:
       - targets: ['host.docker.internal:2381']
         labels:
-          host: 192.168.202.36
+          host: 192.168.201.11
           hostname: dns2

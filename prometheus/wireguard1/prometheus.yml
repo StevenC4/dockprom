@@ -10,7 +10,7 @@ scrape_configs:
     static_configs:
       - targets: ['cadvisor:8080']
         labels:
-          host: 192.168.201.11
+          host: 192.168.201.20
           hostname: wireguard1
 
   - job_name: 'nodeexporter'
@@ -18,7 +18,7 @@ scrape_configs:
     static_configs:
       - targets: ['nodeexporter:9100']
         labels:
-          host: 192.168.201.11
+          host: 192.168.201.20
           hostname: wireguard1
 
   - job_name: 'prometheus'
@@ -26,7 +26,7 @@ scrape_configs:
     static_configs:
       - targets: ['prometheus:9090']
         labels:
-          host: 192.168.201.11
+          host: 192.168.201.20
           hostname: wireguard1
 
   - job_name: 'watchtower'
@@ -36,5 +36,5 @@ scrape_configs:
     static_configs:
       - targets: ['watchtower:8080']
         labels:
-          host: 192.168.201.11
+          host: 192.168.201.20
           hostname: wireguard1
