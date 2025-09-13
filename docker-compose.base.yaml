@@ -110,3 +110,5 @@ services:
       coredns.enabled: true
       coredns.a.1.name: "prometheus.${TRAEFIK_HOSTNAME}.carroll.live"
       coredns.a.2.name: "prometheus.${TRAEFIK_HOSTNAME}.stevenc4.com"
+      coredns.aaaa.1.name: "prometheus.${TRAEFIK_HOSTNAME}.carroll.live"
+      coredns.aaaa.2.name: "prometheus.${TRAEFIK_HOSTNAME}.stevenc4.com"
