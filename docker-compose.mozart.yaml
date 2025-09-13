@@ -42,6 +42,8 @@ services:
       - coredns.enabled=true
       - coredns.a.1.name=alertmanager.carroll.live
       - coredns.a.2.name=alertmanager.stevenc4.com
+      - coredns.aaaa.1.name=alertmanager.carroll.live
+      - coredns.aaaa.2.name=alertmanager.stevenc4.com
 
   cadvisor:
     deploy:
@@ -87,6 +89,8 @@ services:
       - coredns.enabled=true
       - coredns.a.1.name=grafana.carroll.live
       - coredns.a.2.name=grafana.stevenc4.com
+      - coredns.aaaa.1.name=grafana.carroll.live
+      - coredns.aaaa.2.name=grafana.stevenc4.com
 
   ofelia-dockprom:
     container_name: ofelia-dockprom
