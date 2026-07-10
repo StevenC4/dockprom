@@ -24,11 +24,11 @@ groups:
   # Routing: kind=auth -> email (needs a human at a keyboard); kind=data|error -> Slack.
   - name: nh22-extractor
     rules:
-      # Re-auth broken. auth_required stays 1 between runs, so 35m ~= 2 consecutive
-      # 30-min runs still failing -> page immediately rather than waste the day.
+      # Re-auth broken. auth_required stays 1 between runs, so 65m ~= 2 consecutive
+      # hourly runs still failing -> page rather than let data quietly go stale.
       - alert: NH22ExtractorAuthRequired
         expr: nh22_source_auth_required == 1
-        for: 35m
+        for: 65m
         labels:
           severity: critical
           service: nh22-extractor
@@ -38,19 +38,23 @@ groups:
           description: "Source '{{ $labels.source }}' has reported AUTH_REQUIRED for 2+ consecutive runs. Scheduled extraction is blocked until you re-authenticate."
           runbook: "spotify: usually self-heals (scripted TOTP); if a captcha appeared run `docker compose run --rm -p 6080:6080 extractor node src/reauth.mjs spotify`. yts: open the noVNC URL and sign in via `docker compose run --rm -p 6080:6080 extractor node src/reauth.mjs yts`. See nighthawk22-analytics/extractor/RUNBOOK.md."
 
-      # Independent freshness safety net — fires even if a run wrongly self-reports OK.
-      # Guarded on >0 so a brand-new deploy (never-succeeded) doesn't page before first success.
-      - alert: NH22DataStaleWarning
-        expr: nh22_source_last_success_timestamp > 0 and (time() - nh22_source_last_success_timestamp) > 108000 and (time() - nh22_source_last_success_timestamp) <= 259200
+      # Data-missing signal: alert only once we're missing MORE THAN 2 DAYS' worth
+      # of data. last_success_timestamp advances daily in normal operation (age
+      # stays under ~25h), so >48h means a full day was missed. Independent of the
+      # run's self-reported status, so it catches silent breakage too. Guarded on
+      # >0 so a brand-new deploy (never-succeeded) doesn't fire before first success.
+      - alert: NH22DataStale
+        expr: nh22_source_last_success_timestamp > 0 and (time() - nh22_source_last_success_timestamp) > 172800 and (time() - nh22_source_last_success_timestamp) <= 259200
         for: 15m
         labels:
           severity: warning
           service: nh22-extractor
           kind: data
         annotations:
-          summary: "nh22 {{ $labels.source }} data stale (>30h)"
-          description: "No confirmed-complete gate for '{{ $labels.source }}' in over 30 hours."
+          summary: "nh22 {{ $labels.source }} missing >2 days of data"
+          description: "No confirmed-complete gate for '{{ $labels.source }}' in over 2 days."
 
+      # Escalation: still missing after 3 days -> the pipeline is almost certainly broken.
       - alert: NH22DataStaleCritical
         expr: nh22_source_last_success_timestamp > 0 and (time() - nh22_source_last_success_timestamp) > 259200
         for: 15m
@@ -59,32 +63,20 @@ groups:
           service: nh22-extractor
           kind: data
         annotations:
-          summary: "nh22 {{ $labels.source }} data stale (>72h)"
-          description: "No confirmed-complete gate for '{{ $labels.source }}' in over 72 hours. The pipeline is likely broken."
+          summary: "nh22 {{ $labels.source }} missing >3 days of data"
+          description: "No confirmed-complete gate for '{{ $labels.source }}' in over 3 days. The pipeline is likely broken."
 
-      # Yesterday still incomplete after the MT cutoff (set by the extractor itself).
-      - alert: NH22IncompleteAtCutoff
-        expr: nh22_source_incomplete_at_cutoff == 1
-        for: 5m
-        labels:
-          severity: warning
-          service: nh22-extractor
-          kind: data
-        annotations:
-          summary: "nh22 {{ $labels.source }} incomplete past cutoff"
-          description: "'{{ $labels.source }}' did not complete the target day before the 14:00 MT cutoff."
-
-      # Unexpected/unclassified failure.
+      # Unexpected/unclassified failure across 2+ consecutive hourly runs.
       - alert: NH22ExtractorRunError
         expr: nh22_source_last_run_status{status="UNKNOWN"} == 1
-        for: 10m
+        for: 65m
         labels:
           severity: warning
           service: nh22-extractor
           kind: error
         annotations:
           summary: "nh22 {{ $labels.source }} run error (UNKNOWN)"
-          description: "'{{ $labels.source }}' last run classified UNKNOWN — check extractor container logs."
+          description: "'{{ $labels.source }}' classified UNKNOWN for 2+ consecutive runs — check extractor container logs."
 
       # Metrics stopped being written at all (textfile absent) — belt for the whole job.
       - alert: NH22ExtractorMetricsMissing
