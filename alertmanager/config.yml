@@ -32,7 +32,9 @@ receivers:
   # NightHawk22 data/error alerts. Replace api_url with your Slack incoming webhook.
   - name: 'nh22-slack'
     slack_configs:
-    - api_url: 'https://hooks.slack.com/services/REPLACE/WITH/WEBHOOK'
+    # Webhook URL is read from a git-ignored file so the secret never enters git.
+    # Create alertmanager/slack_webhook_url on the host with the hooks.slack.com URL.
+    - api_url_file: '/etc/alertmanager/slack_webhook_url'
       channel: '#nh22-alerts'
       send_resolved: true
       title: '{{ .CommonAnnotations.summary }}'
