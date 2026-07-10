@@ -9,6 +9,18 @@ route:
     group_wait: 30s
     receiver: 'email'
     repeat_interval: 2h
+    routes:
+      # NightHawk22 extractor: auth breakage -> email (needs a keyboard),
+      # everything else (data staleness, run errors) -> Slack.
+      - matchers:
+          - service="nh22-extractor"
+        receiver: 'nh22-slack'
+        group_by: ['alertname', 'source']
+        routes:
+          - matchers:
+              - kind="auth"
+            receiver: 'email'
+            repeat_interval: 1h
 
 receivers:
   - name: 'email'
@@ -16,3 +28,16 @@ receivers:
     - to: 'stevencarroll90@gmail.com'
       from: 'alertmanager@stevenc4.com'
       smarthost: 'smtpd:25'
+
+  # NightHawk22 data/error alerts. Replace api_url with your Slack incoming webhook.
+  - name: 'nh22-slack'
+    slack_configs:
+    - api_url: 'https://hooks.slack.com/services/REPLACE/WITH/WEBHOOK'
+      channel: '#nh22-alerts'
+      send_resolved: true
+      title: '{{ .CommonAnnotations.summary }}'
+      text: >-
+        {{ range .Alerts }}*{{ .Labels.severity | toUpper }}* {{ .Annotations.description }}
+        {{ if .Annotations.runbook }}
+        *Runbook:* {{ .Annotations.runbook }}{{ end }}
+        {{ end }}
