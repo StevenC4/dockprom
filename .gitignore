@@ -6,6 +6,7 @@
 /env/
 /env/*
 /textfile_collector/*
+/alertmanager/slack_webhook_url
 /secrets/
 /secrets/*
 /prometheus/prometheus.yml

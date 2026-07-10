@@ -18,3 +18,82 @@ groups:
         annotations:
           summary: "Scrape failure for {{ $labels.job }} on {{ $labels.hostname }}"
           description: "Prometheus failed to scrape the job '{{ $labels.job }}' (instance {{ $labels.instance }}) on '{{ $labels.hostname }}' for at least 2 minutes."
+
+  # NightHawk22 direct-extraction pipeline (Spotify + YouTube Studio).
+  # Metrics arrive via the node_exporter textfile collector as nh22_source_*.
+  # Routing: kind=auth -> email (needs a human at a keyboard); kind=data|error -> Slack.
+  - name: nh22-extractor
+    rules:
+      # Re-auth broken. auth_required stays 1 between runs, so 35m ~= 2 consecutive
+      # 30-min runs still failing -> page immediately rather than waste the day.
+      - alert: NH22ExtractorAuthRequired
+        expr: nh22_source_auth_required == 1
+        for: 35m
+        labels:
+          severity: critical
+          service: nh22-extractor
+          kind: auth
+        annotations:
+          summary: "nh22 {{ $labels.source }} needs re-auth"
+          description: "Source '{{ $labels.source }}' has reported AUTH_REQUIRED for 2+ consecutive runs. Scheduled extraction is blocked until you re-authenticate."
+          runbook: "spotify: usually self-heals (scripted TOTP); if a captcha appeared run `docker compose run --rm -p 6080:6080 extractor node src/reauth.mjs spotify`. yts: open the noVNC URL and sign in via `docker compose run --rm -p 6080:6080 extractor node src/reauth.mjs yts`. See nighthawk22-analytics/extractor/RUNBOOK.md."
+
+      # Independent freshness safety net — fires even if a run wrongly self-reports OK.
+      # Guarded on >0 so a brand-new deploy (never-succeeded) doesn't page before first success.
+      - alert: NH22DataStaleWarning
+        expr: nh22_source_last_success_timestamp > 0 and (time() - nh22_source_last_success_timestamp) > 108000 and (time() - nh22_source_last_success_timestamp) <= 259200
+        for: 15m
+        labels:
+          severity: warning
+          service: nh22-extractor
+          kind: data
+        annotations:
+          summary: "nh22 {{ $labels.source }} data stale (>30h)"
+          description: "No confirmed-complete gate for '{{ $labels.source }}' in over 30 hours."
+
+      - alert: NH22DataStaleCritical
+        expr: nh22_source_last_success_timestamp > 0 and (time() - nh22_source_last_success_timestamp) > 259200
+        for: 15m
+        labels:
+          severity: critical
+          service: nh22-extractor
+          kind: data
+        annotations:
+          summary: "nh22 {{ $labels.source }} data stale (>72h)"
+          description: "No confirmed-complete gate for '{{ $labels.source }}' in over 72 hours. The pipeline is likely broken."
+
+      # Yesterday still incomplete after the MT cutoff (set by the extractor itself).
+      - alert: NH22IncompleteAtCutoff
+        expr: nh22_source_incomplete_at_cutoff == 1
+        for: 5m
+        labels:
+          severity: warning
+          service: nh22-extractor
+          kind: data
+        annotations:
+          summary: "nh22 {{ $labels.source }} incomplete past cutoff"
+          description: "'{{ $labels.source }}' did not complete the target day before the 14:00 MT cutoff."
+
+      # Unexpected/unclassified failure.
+      - alert: NH22ExtractorRunError
+        expr: nh22_source_last_run_status{status="UNKNOWN"} == 1
+        for: 10m
+        labels:
+          severity: warning
+          service: nh22-extractor
+          kind: error
+        annotations:
+          summary: "nh22 {{ $labels.source }} run error (UNKNOWN)"
+          description: "'{{ $labels.source }}' last run classified UNKNOWN — check extractor container logs."
+
+      # Metrics stopped being written at all (textfile absent) — belt for the whole job.
+      - alert: NH22ExtractorMetricsMissing
+        expr: absent(nh22_source_last_run_timestamp)
+        for: 3h
+        labels:
+          severity: warning
+          service: nh22-extractor
+          kind: error
+        annotations:
+          summary: "nh22 extractor metrics missing"
+          description: "No nh22_source_* metrics for 3h — the extractor may not be running or the textfile mount is broken."

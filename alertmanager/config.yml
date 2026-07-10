@@ -9,6 +9,18 @@ route:
     group_wait: 30s
     receiver: 'email'
     repeat_interval: 2h
+    routes:
+      # NightHawk22 extractor: auth breakage -> email (needs a keyboard),
+      # everything else (data staleness, run errors) -> Slack.
+      - matchers:
+          - service="nh22-extractor"
+        receiver: 'nh22-slack'
+        group_by: ['alertname', 'source']
+        routes:
+          - matchers:
+              - kind="auth"
+            receiver: 'email'
+            repeat_interval: 1h
 
 receivers:
   - name: 'email'
@@ -16,3 +28,20 @@ receivers:
     - to: 'stevencarroll90@gmail.com'
       from: 'alertmanager@stevenc4.com'
       smarthost: 'smtpd:25'
+
+  # NightHawk22 data/error alerts routed to the shared/generic "Alerts" Slack
+  # webhook (posts to #alerts). The channel is generic; the MESSAGE carries the
+  # app identity, so a reader in #alerts can tell which app fired at a glance.
+  # No `channel:` override — the app webhook is locked to its own channel.
+  - name: 'nh22-slack'
+    slack_configs:
+    # Webhook URL is read from a git-ignored file so the secret never enters git.
+    # Create alertmanager/slack_webhook_url on the host with the hooks.slack.com URL.
+    - api_url_file: '/etc/alertmanager/slack_webhook_url'
+      send_resolved: true
+      title: '{{ if eq .Status "firing" }}:rotating_light:{{ else }}:white_check_mark:{{ end }} NightHawk22 · {{ .CommonLabels.service }} — {{ .CommonLabels.alertname }}'
+      text: >-
+        {{ range .Alerts }}*{{ .Labels.severity | toUpper }}* [{{ .Labels.source }}] {{ .Annotations.summary }}
+        {{ .Annotations.description }}
+        {{ if .Annotations.runbook }}*Runbook:* {{ .Annotations.runbook }}
+        {{ end }}{{ end }}
