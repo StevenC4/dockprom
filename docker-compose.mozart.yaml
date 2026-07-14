@@ -119,6 +119,8 @@ services:
     build:
       context: ./zfs-utils
     privileged: true
+    # Must stay running so ofelia-dockprom can exec gather-zfs-metrics.sh into it.
+    restart: unless-stopped
     environment:
       - PUID=1000
       - PGID=1000
