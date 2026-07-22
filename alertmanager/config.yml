@@ -40,7 +40,7 @@ receivers:
       from: 'alertmanager@stevenc4.com'
       smarthost: 'smtpd:25'
 
-  # NightHawk22 data/error alerts -> #alerts, posted by the Homelab App via an
+  # NightHawk22 data/error alerts -> #alerts, posted by Cacau via an
   # incoming webhook installed on that app. The channel is generic; the MESSAGE
   # carries the app identity, so a reader in #alerts can tell which app fired at
   # a glance. No `channel:` override — an incoming webhook is bound at install
