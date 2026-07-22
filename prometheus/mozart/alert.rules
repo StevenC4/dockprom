@@ -19,6 +19,38 @@ groups:
           summary: "Scrape failure for {{ $labels.job }} on {{ $labels.hostname }}"
           description: "Prometheus failed to scrape the job '{{ $labels.job }}' (instance {{ $labels.instance }}) on '{{ $labels.hostname }}' for at least 2 minutes."
 
+  # The alerting pipeline itself — "who watches the watcher".
+  # Everything here routes to EMAIL (service="alerting" in alertmanager's config),
+  # deliberately NOT Slack: these fire exactly when Slack delivery is broken, so a
+  # Slack-routed self-alert would be a closed loop that can never report.
+  - name: alerting-pipeline
+    rules:
+      # THE rule that would have caught the July 2026 outage on day one. Every
+      # nh22 alert fired correctly for 9 days and every one died at the last hop
+      # ("open /etc/alertmanager/slack_webhook_url: permission denied"), visible
+      # only in alertmanager's own container log, which nothing read.
+      - alert: AlertmanagerNotificationsFailing
+        expr: rate(alertmanager_notifications_failed_total[10m]) > 0
+        for: 15m
+        labels:
+          severity: critical
+          service: alerting
+        annotations:
+          summary: "Alertmanager cannot deliver to {{ $labels.integration }}"
+          description: "The '{{ $labels.integration }}' receiver has been failing to deliver for 15m+. Alerts are being generated and silently dropped. Check `docker logs alertmanager`."
+          runbook: "Most likely causes: unreadable api_url_file (must be readable by uid 65534 `nobody`), an expired/revoked Slack webhook, or no egress. Verify with: docker exec alertmanager head -c 30 /etc/alertmanager/slack_webhook_url"
+
+      # Prometheus lost its link to alertmanager entirely — nothing can be delivered.
+      - alert: AlertmanagerUnreachable
+        expr: up{job="alertmanager"} == 0
+        for: 10m
+        labels:
+          severity: critical
+          service: alerting
+        annotations:
+          summary: "Alertmanager is unreachable from Prometheus"
+          description: "Prometheus has failed to scrape alertmanager for 10m+. Alert delivery is likely down entirely."
+
   # NightHawk22 direct-extraction pipeline (Spotify + YouTube Studio).
   # Metrics arrive via the node_exporter textfile collector as nh22_source_*.
   # Routing: kind=auth -> email (needs a human at a keyboard); kind=data|error -> Slack.
@@ -89,3 +121,27 @@ groups:
         annotations:
           summary: "nh22 extractor metrics missing"
           description: "No nh22_source_* metrics for 3h — the extractor may not be running or the textfile mount is broken."
+
+      # The job is not EXECUTING at all — distinct from executing and failing.
+      #
+      # NH22ExtractorMetricsMissing above cannot catch this, and did not: it uses
+      # absent(), but the .prom file is a FILE. When the extractor stops running,
+      # node_exporter happily keeps serving the last one it wrote, forever. The
+      # series never goes absent, it goes STALE — so staleness is what to alert on.
+      # In July 2026 the extractor container was deleted (a `docker system prune`
+      # removes exited one-shots) and ofelia failed with "No such container" on
+      # every tick for 9 days while this metric sat frozen and absent() stayed false.
+      #
+      # Normal cadence is 8 runs/day in the 07:00-14:00 MT window, so last_run
+      # should never be older than ~24h. 30h clears a full window plus slack.
+      - alert: NH22ExtractorNotRunning
+        expr: nh22_source_last_run_timestamp > 0 and (time() - nh22_source_last_run_timestamp) > 108000
+        for: 30m
+        labels:
+          severity: critical
+          service: nh22-extractor
+          kind: error
+        annotations:
+          summary: "nh22 {{ $labels.source }} extractor has not run in 30h"
+          description: "The extractor has not EXECUTED for '{{ $labels.source }}' in over 30h — its metrics file is frozen, not missing. The scheduled job is not firing at all."
+          runbook: "Check `docker compose logs ofelia | tail`. 'No such container' means the one-shot containers were removed (e.g. by docker system prune); recreate them with `make up` in nighthawk22-analytics."

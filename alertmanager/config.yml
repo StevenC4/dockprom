@@ -10,6 +10,17 @@ route:
     receiver: 'email'
     repeat_interval: 2h
     routes:
+      # The alerting pipeline itself. MUST go to email: these fire precisely when
+      # Slack delivery is broken, so routing them to Slack would be a closed loop
+      # that reports nothing. (On 2026-07-13 a 0600 webhook file the `nobody`
+      # container user could not read silently dropped 9 days of nh22 alerts —
+      # every notify failed, and nothing watched the notifier.)
+      - matchers:
+          - service="alerting"
+        receiver: 'email'
+        group_by: ['alertname', 'integration']
+        repeat_interval: 6h
+
       # NightHawk22 extractor: auth breakage -> email (needs a keyboard),
       # everything else (data staleness, run errors) -> Slack.
       - matchers:
@@ -29,18 +40,32 @@ receivers:
       from: 'alertmanager@stevenc4.com'
       smarthost: 'smtpd:25'
 
-  # NightHawk22 data/error alerts routed to the shared/generic "Alerts" Slack
-  # webhook (posts to #alerts). The channel is generic; the MESSAGE carries the
-  # app identity, so a reader in #alerts can tell which app fired at a glance.
-  # No `channel:` override — the app webhook is locked to its own channel.
+  # NightHawk22 data/error alerts -> #alerts, posted by the Homelab App via an
+  # incoming webhook installed on that app. The channel is generic; the MESSAGE
+  # carries the app identity, so a reader in #alerts can tell which app fired at
+  # a glance. No `channel:` override — an incoming webhook is bound at install
+  # time to the one channel it was installed to.
+  #
+  # Alertmanager's Slack integration speaks ONLY to incoming webhooks; it cannot
+  # use a bot token. That is why this is a webhook and not chat.postMessage, and
+  # why the app needs the `incoming-webhook` scope. Interposing a bot-token
+  # bridge service here was considered and rejected: a container in the alerting
+  # path is one more thing that can be pruned or crash and take the alerts down
+  # with it — the exact failure this pipeline just suffered.
   - name: 'nh22-slack'
     slack_configs:
     # Webhook URL is read from a git-ignored file so the secret never enters git.
     # Create alertmanager/slack_webhook_url on the host with the hooks.slack.com URL.
+    # It MUST be readable by uid 65534 (the container's `nobody`) — a 0600
+    # steven-owned file silently broke every notify for 9 days in July 2026.
     - api_url_file: '/etc/alertmanager/slack_webhook_url'
       send_resolved: true
       title: '{{ if eq .Status "firing" }}:rotating_light:{{ else }}:white_check_mark:{{ end }} NightHawk22 · {{ .CommonLabels.service }} — {{ .CommonLabels.alertname }}'
+      # `<@UID>` is the escape form, which fires a real notification without
+      # needing link_names. Mention on FIRING CRITICAL only — pinging on warnings
+      # and on every resolve is how a mention gets tuned out.
       text: >-
+        {{ if and (eq .Status "firing") (eq .CommonLabels.severity "critical") }}<@U0BGX8MV8EA> {{ end }}
         {{ range .Alerts }}*{{ .Labels.severity | toUpper }}* [{{ .Labels.source }}] {{ .Annotations.summary }}
         {{ .Annotations.description }}
         {{ if .Annotations.runbook }}*Runbook:* {{ .Annotations.runbook }}

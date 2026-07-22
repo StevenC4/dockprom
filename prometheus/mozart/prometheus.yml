@@ -38,6 +38,18 @@ scrape_configs:
           host: 192.168.205.10
           hostname: mozart
 
+  # Alertmanager was configured as an alert SINK but never scraped as a TARGET,
+  # so alertmanager_notifications_failed_total was invisible and a receiver that
+  # failed on every single notify for 9 days looked exactly like silence.
+  # Scraping it is what makes the alerting pipeline itself observable.
+  - job_name: 'alertmanager'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['alertmanager:9093']
+        labels:
+          host: 192.168.205.10
+          hostname: mozart
+
   - job_name: 'watchtower'
     scrape_interval: 15s
     metrics_path: /v1/metrics
