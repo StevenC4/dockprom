@@ -98,6 +98,47 @@ groups:
           summary: "nh22 {{ $labels.source }} missing >3 days of data"
           description: "No confirmed-complete gate for '{{ $labels.source }}' in over 3 days. The pipeline is likely broken."
 
+      # The extraction path is DEAD BEHIND A PASSING GATE — the third variant of
+      # "the metric does not mean what you think" in this group (see absent() vs
+      # stale below).
+      #
+      # NH22DataStale above watches last_success_timestamp, which advances whenever
+      # the completeness GATE is satisfied — including on short-circuit runs that
+      # never open a browser. So a source whose gate target is already in Postgres
+      # reports perfectly healthy while its browser is broken. On 2026-07-23 a
+      # stale Xvfb lock file broke every Chromium launch; spotify was caught
+      # (its gate target was missing, so last_success froze) but yts sailed on,
+      # because its lagged gate stayed satisfied from an earlier run's window.
+      # Detection for yts would have taken ~4-5 days via DataStale.
+      #
+      # last_extraction_timestamp only advances when a browser run actually
+      # completed, so it catches this directly. Thresholds differ per source
+      # because cadence does: the gate targets today-(1+lag) while each run pulls
+      # the whole 35-day window, so a source only re-extracts every lag+1 days.
+      #   spotify: lag 0 -> extracts daily          -> 48h
+      #   yts:     lag 1 -> extracts every 2nd day  -> 72h
+      # The bare (unlabelled) arm is the 72h catch-all so a NEWLY ADDED source is
+      # covered by default rather than silently unmonitored; spotify is then
+      # tightened on top of it. If NH22_YTS_LAG_DAYS changes, re-derive 72h as
+      # (lag+1) days + ~1 day of slack.
+      #
+      # Guarded on >0: the gauge is 0 until a source's first real extraction under
+      # this state key, and an unguarded time()-0 fires instantly on deploy.
+      - alert: NH22ExtractorNotExtracting
+        expr: >-
+          (nh22_source_last_extraction_timestamp > 0 and (time() - nh22_source_last_extraction_timestamp) > 259200)
+          or
+          (nh22_source_last_extraction_timestamp{source="spotify"} > 0 and (time() - nh22_source_last_extraction_timestamp{source="spotify"}) > 172800)
+        for: 30m
+        labels:
+          severity: warning
+          service: nh22-extractor
+          kind: error
+        annotations:
+          summary: "nh22 {{ $labels.source }} has not actually extracted"
+          description: "'{{ $labels.source }}' has not completed a real extraction in longer than its expected cadence, even though its completeness gate may still look satisfied. The browser/session path is probably broken."
+          runbook: "Check `docker compose logs extractor` for 'FATAL: Xvfb failed to start' or a Chromium launch failure, then the auth sections. See nighthawk22-analytics/extractor/RUNBOOK.md#no-xserver."
+
       # Unexpected/unclassified failure across 2+ consecutive hourly runs.
       - alert: NH22ExtractorRunError
         expr: nh22_source_last_run_status{status="UNKNOWN"} == 1
