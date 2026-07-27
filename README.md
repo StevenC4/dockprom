@@ -288,6 +288,30 @@ receivers:
 
 ![Slack Notifications](https://raw.githubusercontent.com/stefanprodan/dockprom/master/screens/Slack_Notifications.png)
 
+### Resolving an alert from Slack (local)
+
+Alerts posted to `#alerts` carry a **Mark resolved** button. Clicking it turns that post green and
+stamps who cleared it — an acknowledgement in Slack only, which changes nothing in Alertmanager.
+
+The button is rendered by the `nh22-slack` receiver (`callback_id: alert:…` plus one legacy
+attachment action); the click is handled by the [`alert-ack`](alert-ack/README.md) container,
+behind `homelab-slack-gateway`. Alert *delivery* does not depend on that container — Alertmanager
+still posts through its own incoming webhook, so if alert-ack is down only the button stops
+working.
+
+**One rule when editing the `nh22-slack` templates:** a template that fails to evaluate cancels
+the notify outright and the alert is never delivered. The Slack notifier renders `template.Data`
+(`.Status`, `.CommonLabels`, `.Alerts`) — it has **no `.GroupKey`**. Validate before reloading:
+
+```bash
+docker run --rm --entrypoint amtool -v "$PWD/alertmanager/config.yml":/tmp/c.yml:ro \
+  prom/alertmanager:v0.25.0 check-config /tmp/c.yml
+```
+
+Note that `check-config` validates *syntax*, not template field names — the only proof is a real
+notification, so fire one with `amtool alert add` and check `docker logs alertmanager` for
+`Notify for alerts failed`.
+
 ## Sending metrics to the Pushgateway
 
 The [pushgateway](https://github.com/prometheus/pushgateway) is used to collect data from batch jobs or from services.

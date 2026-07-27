@@ -1,6 +1,10 @@
 networks:
   smtp-net:
     external: true
+  # Created once by homelab-slack-gateway (`make net`). alert-ack joins it to receive the
+  # Resolve clicks the gateway unicasts under the `alert:` namespace.
+  homelab-slack:
+    external: true
 
 volumes:
   grafana_data: {}
@@ -113,6 +117,32 @@ services:
       - monitor-net
     labels:
       monitor_group: monitoring
+
+  # The Resolve button on #alerts posts. A Slack interactivity backend behind
+  # homelab-slack-gateway: the gateway holds the workspace's one app token and unicasts
+  # `alert:` clicks here over signed HTTP, and this marks the post resolved with chat.update.
+  #
+  # It is NOT in the alerting path. Alertmanager still posts through its own incoming webhook,
+  # so if this container is down or missing, alerts arrive exactly as before and only the
+  # button stops working. That is why the button hangs off the webhook post rather than this
+  # service posting the alert — see the note on the nh22-slack receiver in alertmanager/config.yml.
+  #
+  # NOTE the missing `ports:`. It listens on 8084 on the private `homelab-slack` network only
+  # and is never published to the host — the HMAC is defense in depth, not the only defense.
+  alert-ack:
+    container_name: alert-ack
+    build:
+      context: ./alert-ack
+    restart: unless-stopped
+    # SLACK_BOT_TOKEN (xoxb-, shared with the other backends) and HOMELAB_GATEWAY_SECRET (the
+    # same value the gateway signs with, or it will 401 us). env/ is gitignored; see the README.
+    env_file: ./env/alert-ack.env
+    networks:
+      homelab-slack:
+        aliases:
+          - alert-ack-backend   # the name the gateway's routes.yaml dials
+    labels:
+      - com.centurylinklabs.watchtower.enable=false
 
   zfs-utils:
     container_name: zfs-utils

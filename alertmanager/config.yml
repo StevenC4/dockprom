@@ -87,3 +87,31 @@ receivers:
         {{ .Annotations.description }}
         {{ if .Annotations.runbook }}*Runbook:* {{ .Annotations.runbook }}
         {{ end }}{{ end }}
+      # A Resolve button on the post. Clicking it turns THIS post green and stamps who
+      # cleared it — see dockprom/alert-ack. It is a Slack-side acknowledgement only and
+      # changes nothing in Alertmanager: if the alert is still firing it will notify again
+      # on repeat_interval as a new (red) post. That is the point — a green post means "a
+      # human saw this one", never "the problem is gone".
+      #
+      # `callback_id` is the routing key: homelab-slack-gateway unicasts interactivity by
+      # the namespace before the first ':' (see its config/routes.yaml), so `alert:` is
+      # what steers the click to alert-ack. `actions[].name` is the verb within it.
+      #
+      # These are LEGACY attachment actions, not Block Kit. Alertmanager's Slack notifier
+      # has no `blocks` field, and an attachment is in any case the only thing in Slack that
+      # draws a coloured border — which is the whole ask. Note it renders on resolved posts
+      # too: the list cannot be made conditional, and a template that rendered an empty
+      # button text would make Slack reject the notify outright, which is a far worse
+      # failure than a redundant button. Hence the conditional LABEL instead.
+      callback_id: 'alert:{{ .CommonLabels.service }}'
+      actions:
+        - type: button
+          name: 'alert:resolve'
+          text: '{{ if eq .Status "firing" }}Mark resolved{{ else }}Acknowledge{{ end }}'
+          # Log context only — alert-ack reads nothing from it. Keep it to fields that ALWAYS
+          # exist: the Slack notifier renders `template.Data` (Status / CommonLabels / Alerts),
+          # which has no .GroupKey, and a template that fails to evaluate cancels the whole
+          # notify — the alert is then never delivered at all. Tried .GroupKey on 2026-07-23;
+          # it took the notification down with "can't evaluate field GroupKey".
+          value: '{{ .Status }}:{{ .CommonLabels.alertname }}'
+          style: primary
