@@ -45,10 +45,24 @@ to_epoch() {
   date -u -d "$ts" +%s 2>/dev/null || echo 0
 }
 
-collect() {
-  tmp="${OUT_FILE}.$$"
+# Refuses anything that is not well-formed Prometheus text. This is not belt-and-braces: node
+# _exporter skips a *.prom file it cannot parse (setting node_textfile_scrape_error=1), so ONE
+# malformed line does not degrade this collector, it removes it — and a corrupt file then looks
+# identical to a missing exporter while taking every scheduled-job alert blind with it. Publishing
+# nothing is strictly better than publishing garbage, because a file that stops advancing trips
+# OneShotExporterStale, which says what actually happened.
+validate() {
+  f="$1"
+  [ -s "$f" ] || return 1
+  awk '
+    /^#/ { next }
+    /^[a-zA-Z_][a-zA-Z0-9_]*\{[^}]*\} -?[0-9]+(\.[0-9]+)?$/ { good++; next }
+    { bad++ }
+    END { exit (bad > 0 || good == 0) ? 1 : 0 }
+  ' "$f"
+}
 
-  {
+build_metrics() {
     echo "# HELP oneshot_job_present Whether the job's container exists at all (0 means it was removed, e.g. by docker system prune)."
     echo "# TYPE oneshot_job_present gauge"
     echo "# HELP oneshot_job_running Whether the job's container is executing right now."
@@ -87,7 +101,26 @@ collect() {
       echo "oneshot_job_last_exit_code{$lbl} ${exit_code:-0}"
       echo "oneshot_job_last_finish_seconds{$lbl} $(to_epoch "$finished")"
     done
-  } > "$tmp"
+}
+
+collect() {
+  tmp="${OUT_FILE}.$$"
+
+  # `collect` is called as `collect || log`, which suppresses errexit for everything inside it.
+  # So a failure mid-build does NOT abort — it just yields a short file. Both the status check
+  # and the validation below therefore have to be explicit; relying on `set -e` here does not
+  # work, and the original version moved whatever it produced into place unconditionally.
+  if ! build_metrics > "$tmp"; then
+    log "metric build failed; keeping the previous file rather than publishing a partial one"
+    rm -f "$tmp"
+    return 1
+  fi
+
+  if ! validate "$tmp"; then
+    log "refusing to publish malformed metrics; keeping the previous file"
+    rm -f "$tmp"
+    return 1
+  fi
 
   # Atomic replace. node_exporter re-reads this file on every scrape, so a partial write would
   # be served as a malformed collector and poison the whole textfile directory for that scrape.
