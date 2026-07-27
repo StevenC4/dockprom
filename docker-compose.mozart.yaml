@@ -129,3 +129,53 @@ services:
       - ./textfile_collector:/zfs-metrics
     labels:
       - com.centurylinklabs.watchtower.enable=false
+
+  # Liveness for the scheduled one-shot job containers across every stack on this host.
+  #
+  # Ofelia has no metrics endpoint, so a job that stops firing altogether is invisible — the
+  # exact shape of the July 2026 outage, where a `docker system prune` removed the exited
+  # one-shots and every tick failed with "No such container" for 9 days with no signal. This
+  # reads what Docker already knows about each container (exists / running / finished when /
+  # exit code) and publishes it, so no job has to be modified to be monitored.
+  #
+  # It deliberately does NOT run under ofelia-dockprom like the zfs and watchtower collectors:
+  # a monitor that depends on a scheduler cannot be trusted to report that scheduler's failure.
+  # It self-loops instead, and its own death is caught by node_textfile_mtime_seconds going
+  # stale (see the scheduled-jobs alert group).
+  oneshot-exporter:
+    container_name: oneshot-exporter
+    build:
+      context: ./oneshot-exporter
+    restart: unless-stopped
+    environment:
+      ONESHOT_INTERVAL: "60"
+      # container|max_age_seconds|service
+      #
+      # max_age is a STALENESS BUDGET, not the schedule: it must exceed the largest legitimate
+      # gap between runs, including overnight backoff and windowed schedules, or the alert
+      # flaps every night. It is emitted as a metric so one generic rule serves every job —
+      # a monthly report and a 15-minute poll cannot share a threshold.
+      #
+      # `service` selects the Alertmanager route. Everything here lands on the default `email`
+      # receiver; vpn-jobs has an explicit route saying so, because that was asked for by name.
+      ONESHOT_TARGETS: |
+        nh22-analytics-importer-1|10800|nh22-jobs
+        nh22-analytics-processor-1|10800|nh22-jobs
+        nh22-analytics-extractor-1|108000|nh22-jobs
+        garmin-analytics-ingest|7200|garmin-jobs
+        garmin-workout-progression|28800|garmin-jobs
+        garmin-running-shoe-rotation|28800|garmin-jobs
+        garmin-treadmill-calorie-correction|28800|garmin-jobs
+        garmin-fitness-report-weekly|777600|garmin-jobs
+        garmin-fitness-report-monthly|3024000|garmin-jobs
+        hopper-gmail|3600|hopper-jobs
+        luiz-car-loan|50400|finance-jobs
+        configarr|300|vpn-jobs
+    volumes:
+      # Read-only: this only ever inspects. It never starts, stops or creates anything, which
+      # is what lets it hold the socket without being another way to mutate the host.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./textfile_collector:/textfile_collector
+    labels:
+      monitor_group: monitoring
+      com.centurylinklabs.watchtower.enable: "false"
