@@ -186,6 +186,13 @@ services:
       # flaps every night. It is emitted as a metric so one generic rule serves every job —
       # a monthly report and a 15-minute poll cannot share a threshold.
       #
+      # THIS FILE IS COUPLED TO SCHEDULES THAT LIVE IN OTHER REPOS. Every budget below is
+      # derived from an Ofelia schedule in nighthawk22-analytics, garmin-analytics, garmin-jobs,
+      # receipt-hopper, finance-jobs or vpn. Nothing enforces the link, so **changing a job's
+      # cadence in its own repo requires changing its budget here in the same breath**. This is
+      # not hypothetical: configarr was moved from @every 15s to @every 15m in vpn, which left a
+      # 300s budget tighter than the schedule itself and made OneShotJobStale flap permanently.
+      #
       # `service` selects the Alertmanager route. Everything here lands on the default `email`
       # receiver; vpn-jobs has an explicit route saying so, because that was asked for by name.
       ONESHOT_TARGETS: |
@@ -200,7 +207,7 @@ services:
         garmin-fitness-report-monthly|3024000|garmin-jobs
         hopper-gmail|3600|hopper-jobs
         luiz-car-loan|50400|finance-jobs
-        configarr|300|vpn-jobs
+        configarr|2700|vpn-jobs
     volumes:
       # Read-only: this only ever inspects. It never starts, stops or creates anything, which
       # is what lets it hold the socket without being another way to mutate the host.
