@@ -186,3 +186,126 @@ groups:
           summary: "nh22 {{ $labels.source }} extractor has not run in 30h"
           description: "The extractor has not EXECUTED for '{{ $labels.source }}' in over 30h — its metrics file is frozen, not missing. The scheduled job is not firing at all."
           runbook: "Check `docker compose logs ofelia | tail`. 'No such container' means the one-shot containers were removed (e.g. by docker system prune); recreate them with `make up` in nighthawk22-analytics."
+  # Scheduled one-shot jobs across every stack on this host, from oneshot-exporter.
+  #
+  # Ofelia has no metrics endpoint of its own, so before this group the only job on the host
+  # with any liveness monitoring was the nh22 extractor — and that only because the extractor
+  # reports on itself. Everything else (importer, processor, garmin ingest, the five garmin
+  # jobs, hopper-gmail, luiz-car-loan, configarr) could stop firing entirely and nothing would
+  # notice. These rules read container state instead of asking the jobs to cooperate.
+  #
+  # Routing: all of these carry a `service` label ending in "-jobs" and none of them has a
+  # Slack route, so they land on Alertmanager's default `email` receiver.
+  - name: scheduled-jobs
+    rules:
+      # THE prune detector. This is the exact state that was invisible for 9 days in July 2026:
+      # `docker system prune` removes exited one-shot containers, and Ofelia's `docker start`
+      # then fails with "No such container" forever. ensure-containers now repairs this
+      # automatically in every stack, so if this fires, the repair itself is broken.
+      - alert: OneShotJobContainerMissing
+        expr: oneshot_job_present == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Scheduled job container {{ $labels.container }} does not exist"
+          description: "The container '{{ $labels.container }}' ({{ $labels.service }}) is gone, so its Ofelia schedule is failing with 'No such container' on every tick. Most likely a `docker system prune` removed it and that stack's ensure-containers job has not repaired it."
+          runbook: "Run `make build down up` in the owning repo. If it recurs, ensure-containers is broken there — check its hardcoded project path, and prefer `docker image prune -a` over bare `docker system prune`."
+
+      # Fires when a job has not completed within its own staleness budget. The threshold is
+      # carried per-job as oneshot_job_max_age_seconds (set in the exporter's compose config
+      # from each job's real schedule), so one rule covers a monthly report and a 15-minute
+      # poll without either flapping or going blind.
+      - alert: OneShotJobStale
+        # Written as "overage > 0" rather than "age > budget" so $value is the amount by which
+        # the job is late, which is what the annotation reports. `and last_finish > 0` excludes
+        # containers that have never run — those are OneShotJobNeverRan, not stale.
+        expr: (time() - oneshot_job_last_finish_seconds) - oneshot_job_max_age_seconds > 0 and oneshot_job_last_finish_seconds > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Scheduled job {{ $labels.container }} has not run within its budget"
+          description: "'{{ $labels.container }}' ({{ $labels.service }}) last completed {{ $value | humanizeDuration }} beyond its staleness budget. The container exists, so this is a scheduler or job problem rather than a missing container."
+          runbook: "Check `docker compose logs <scheduler>` in the owning repo, and ./logs/ofelia for a saved failure report."
+
+      # The container exists but has never completed a run. Distinct from stale: this is what a
+      # freshly recreated container looks like if the schedule that should start it is broken.
+      - alert: OneShotJobNeverRan
+        expr: oneshot_job_present == 1 and oneshot_job_last_finish_seconds == 0
+        for: 2h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Scheduled job {{ $labels.container }} has never run"
+          description: "'{{ $labels.container }}' ({{ $labels.service }}) exists but has no completed run. If ensure-containers recreated it, the schedule that should start it may not be firing."
+
+      # Last completed run failed. The metric persists between runs, so this stays firing until
+      # a subsequent run succeeds — which is the intent: a job failing every hour should not
+      # resolve itself between attempts.
+      - alert: OneShotJobFailing
+        expr: oneshot_job_last_exit_code != 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Scheduled job {{ $labels.container }} exited {{ $value }}"
+          description: "The last completed run of '{{ $labels.container }}' ({{ $labels.service }}) exited non-zero. It will keep firing until a run succeeds."
+          runbook: "`docker logs {{ $labels.container }}` for the failure, and ./logs/ofelia in the owning repo for the saved report."
+
+      # Who watches this watcher. The exporter self-loops rather than running under ofelia, so
+      # its own death has to be caught by the freshness of the file it writes.
+      - alert: OneShotExporterStale
+        expr: time() - node_textfile_mtime_seconds{file="oneshot_jobs.prom"} > 300
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "oneshot-exporter has stopped writing"
+          description: "oneshot_jobs.prom has not been updated in over 5 minutes (it writes every 60s). Every scheduled-job alert above is blind while this is true."
+
+      - alert: OneShotExporterMissing
+        expr: absent(node_textfile_mtime_seconds{file="oneshot_jobs.prom"})
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "oneshot-exporter metrics are absent entirely"
+          description: "No oneshot_jobs.prom at all — the exporter has never run, or the textfile mount is broken. Every scheduled-job alert above is blind."
+
+  # Textfile collectors. node_exporter publishes the mtime of every file it reads, which is the
+  # only honest staleness signal for a collector: the metrics themselves are re-served on every
+  # scrape from a file that may be hours old, so their own timestamps prove nothing.
+  - name: textfile-collectors
+    rules:
+      # The zfs collector runs @every 15s via ofelia-dockprom. Until now nothing alerted if it
+      # stopped — the pool metrics would simply freeze at their last values and keep being
+      # served, looking exactly like a healthy, unchanging pool.
+      - alert: ZfsMetricsStale
+        expr: time() - node_textfile_mtime_seconds{file="zfs-metrics.prom"} > 300
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "ZFS metrics have stopped updating"
+          description: "zfs-metrics.prom has not been written in over 5 minutes (cadence is 15s). The zfs_* series are frozen at their last values, not absent — they will look healthy while telling you nothing."
+          runbook: "Check `docker logs ofelia-dockprom` and that the zfs-utils container is running."
+
+      # Catch-all for any other collector writing into this directory, including ones defined
+      # outside this repo (the watchtower collector's container is not in this compose, so its
+      # filename cannot be asserted here). Deliberately loose at 1h: it exists to notice a dead
+      # collector at all, not to pin down cadence. The tightly-scoped rules above are excluded
+      # so a single failure does not produce two alerts, and nh22_extractor.prom is excluded
+      # because it legitimately goes ~17h between writes overnight and has its own alert group.
+      - alert: TextfileCollectorStale
+        # The doubled backslashes are required and are NOT a typo. This is an unquoted YAML
+        # scalar, so `\\.` reaches PromQL verbatim; PromQL then unescapes the string literal to
+        # `\.` for the regex engine. A single `\.` here is a PromQL parse error ("unknown escape
+        # sequence"), which takes the whole rules file down, not just this rule.
+        expr: time() - node_textfile_mtime_seconds{file!~"zfs-metrics\\.prom|oneshot_jobs\\.prom|nh22_extractor\\.prom"} > 3600
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Textfile collector {{ $labels.file }} has stopped updating"
+          description: "{{ $labels.file }} has not been written in over an hour. Its metrics are frozen at their last values rather than absent, so they will look healthy."

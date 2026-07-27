@@ -21,6 +21,23 @@ route:
         group_by: ['alertname', 'integration']
         repeat_interval: 6h
 
+      # Scheduled-job liveness (oneshot-exporter): the arr/vpn stack goes to EMAIL, never
+      # Slack — asked for explicitly.
+      #
+      # This route is technically redundant today: the top-level receiver is already 'email',
+      # so anything without a matching route lands there anyway. It is written out regardless
+      # so the choice is durable rather than incidental — if the default receiver is ever
+      # changed to Slack, vpn-jobs keeps going to email instead of silently following it.
+      #
+      # The other *-jobs services (nh22-jobs, garmin-jobs, hopper-jobs, finance-jobs) have no
+      # route and so also fall through to email. That is the conservative default, not a
+      # considered decision per stack — add routes here if any of them should go to Slack.
+      - matchers:
+          - service="vpn-jobs"
+        receiver: 'email'
+        group_by: ['alertname', 'container']
+        repeat_interval: 6h
+
       # NightHawk22 extractor: auth breakage -> email (needs a keyboard),
       # everything else (data staleness, run errors) -> Slack.
       - matchers:
