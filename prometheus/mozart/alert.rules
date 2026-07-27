@@ -256,7 +256,7 @@ groups:
       # Who watches this watcher. The exporter self-loops rather than running under ofelia, so
       # its own death has to be caught by the freshness of the file it writes.
       - alert: OneShotExporterStale
-        expr: time() - node_textfile_mtime_seconds{file="oneshot_jobs.prom"} > 300
+        expr: time() - node_textfile_mtime_seconds{file=~"(.*/)?oneshot_jobs\\.prom"} > 300
         for: 10m
         labels:
           severity: critical
@@ -265,7 +265,7 @@ groups:
           description: "oneshot_jobs.prom has not been updated in over 5 minutes (it writes every 60s). Every scheduled-job alert above is blind while this is true."
 
       - alert: OneShotExporterMissing
-        expr: absent(node_textfile_mtime_seconds{file="oneshot_jobs.prom"})
+        expr: absent(node_textfile_mtime_seconds{file=~"(.*/)?oneshot_jobs\\.prom"})
         for: 15m
         labels:
           severity: critical
@@ -282,7 +282,7 @@ groups:
       # stopped — the pool metrics would simply freeze at their last values and keep being
       # served, looking exactly like a healthy, unchanging pool.
       - alert: ZfsMetricsStale
-        expr: time() - node_textfile_mtime_seconds{file="zfs-metrics.prom"} > 300
+        expr: time() - node_textfile_mtime_seconds{file=~"(.*/)?zfs-metrics\\.prom"} > 300
         for: 10m
         labels:
           severity: warning
@@ -302,7 +302,7 @@ groups:
         # scalar, so `\\.` reaches PromQL verbatim; PromQL then unescapes the string literal to
         # `\.` for the regex engine. A single `\.` here is a PromQL parse error ("unknown escape
         # sequence"), which takes the whole rules file down, not just this rule.
-        expr: time() - node_textfile_mtime_seconds{file!~"zfs-metrics\\.prom|oneshot_jobs\\.prom|nh22_extractor\\.prom"} > 3600
+        expr: time() - node_textfile_mtime_seconds{file!~"(.*/)?(zfs-metrics|oneshot_jobs|nh22_extractor)\\.prom"} > 3600
         for: 30m
         labels:
           severity: warning
