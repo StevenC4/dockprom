@@ -38,8 +38,16 @@ route:
         group_by: ['alertname', 'container']
         repeat_interval: 6h
 
-      # NightHawk22 extractor: auth breakage -> email (needs a keyboard),
-      # everything else (data staleness, run errors) -> Slack.
+      # NightHawk22 extractor: auth breakage -> email AND Slack; everything else
+      # (data staleness, run errors) -> Slack.
+      #
+      # Auth was email-only until 2026-07-28, on the reasoning that it needs a
+      # human at a keyboard. It still does — the email stays. But email-only left
+      # a gap the extractor filled by posting to Slack directly from its own
+      # webhook, bypassing this pipeline entirely: no ack button, no grouping, no
+      # silence, no repeat_interval, and no self-monitoring. That direct path is
+      # being removed from the extractor, so auth now routes here as well and
+      # arrives as Cacau with the same Resolve button as every other alert.
       - matchers:
           - service="nh22-extractor"
         receiver: 'nh22-slack'
@@ -47,7 +55,7 @@ route:
         routes:
           - matchers:
               - kind="auth"
-            receiver: 'email'
+            receiver: 'nh22-auth'
             repeat_interval: 1h
 
 receivers:
@@ -75,7 +83,8 @@ receivers:
     # Create alertmanager/slack_webhook_url on the host with the hooks.slack.com URL.
     # It MUST be readable by uid 65534 (the container's `nobody`) — a 0600
     # steven-owned file silently broke every notify for 9 days in July 2026.
-    - api_url_file: '/etc/alertmanager/slack_webhook_url'
+    - &nh22_slack_config
+      api_url_file: '/etc/alertmanager/slack_webhook_url'
       send_resolved: true
       title: '{{ if eq .Status "firing" }}:rotating_light:{{ else }}:white_check_mark:{{ end }} NightHawk22 · {{ .CommonLabels.service }} — {{ .CommonLabels.alertname }}'
       # `<@UID>` is the escape form, which fires a real notification without
@@ -115,3 +124,24 @@ receivers:
           # it took the notification down with "can't evaluate field GroupKey".
           value: '{{ .Status }}:{{ .CommonLabels.alertname }}'
           style: primary
+
+  # Auth breakage: BOTH channels, on purpose.
+  #
+  # Re-auth needs a human at a keyboard, which is why this ever went to email —
+  # that has not changed and the email stays. What changed is that email-only
+  # left auth as the one nh22 alert absent from Slack, and the extractor filled
+  # that gap by posting to Slack itself, out of band: no ack button, no grouping,
+  # no silence, no repeat_interval, and nothing watching whether the post landed.
+  # Routing auth here instead means it arrives as Cacau with the same Resolve
+  # button as everything else, and the extractor's second delivery route can go.
+  #
+  # The slack_configs block is an alias of nh22-slack's, not a copy: two
+  # divergent renderings of the same alert is how a template fix lands on one
+  # channel and not the other.
+  - name: 'nh22-auth'
+    email_configs:
+    - to: 'stevencarroll90@gmail.com'
+      from: 'alertmanager@stevenc4.com'
+      smarthost: 'smtpd:25'
+    slack_configs:
+    - *nh22_slack_config
