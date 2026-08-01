@@ -145,6 +145,43 @@ groups:
           description: "'{{ $labels.source }}' has not completed a real extraction in longer than its expected cadence, even though its completeness gate may still look satisfied. The browser/session path is probably broken."
           runbook: "Check `docker compose logs extractor` for 'FATAL: Xvfb failed to start' or a Chromium launch failure, then the auth sections. See nighthawk22-analytics/extractor/RUNBOOK.md#no-xserver."
 
+      # ASCAP session keepalive (nh22_ascap_session_*, written by the 24/7
+      # keepalive-ascap job, NOT by the extractor's nh22_source_* set).
+      #
+      # ASCAP's server-side ma-api session expires on INACTIVITY. Left alone it dies
+      # overnight and the next crawl needs a human login, so a job touches it every
+      # 20 minutes. These rules say whether that is working.
+      #
+      # kind=auth, so it routes to nh22-auth (email + Cacau) like every other alert
+      # that needs a person at a keyboard — which this does: the only fix is signing
+      # in at the Zero Trust console, which auto-reauth will already have spawned.
+      - alert: NH22AscapSessionDead
+        expr: nh22_ascap_session_valid == 0
+        for: 45m
+        labels:
+          severity: critical
+          service: nh22-extractor
+          kind: auth
+        annotations:
+          summary: "nh22 ascap session is dead"
+          description: "The ASCAP keepalive has been failing for 45m+ (2+ consecutive checks). Publishing extraction is blocked until someone signs in, and the session cannot recover on its own."
+          runbook: "Open https://nh22-reauth.carroll.live/ — auto-reauth spawns the console within 15 minutes (07:00-21:59 MT) and waits. ASCAP needs a password AND an SMS code. If nothing is waiting, run `make reauth SOURCE=ascap` in nighthawk22-analytics."
+
+      # The keepalive itself stopped running. Distinct from the session being dead:
+      # here we do not know the session's state at all, and it is quietly idling
+      # toward the expiry the keepalive exists to prevent. 70m = 3 missed ticks.
+      - alert: NH22AscapKeepaliveStalled
+        expr: time() - nh22_ascap_session_last_check_timestamp > 4200
+        for: 15m
+        labels:
+          severity: warning
+          service: nh22-extractor
+          kind: error
+        annotations:
+          summary: "nh22 ascap keepalive has stopped checking"
+          description: "No ASCAP session check in over 70 minutes (it runs every 20). The session is unmonitored and will idle out if this persists."
+          runbook: "`docker logs nh22-analytics-keepalive-ascap-1`. If the container is missing, ensure-containers recreates it at :05; if ofelia itself is down, SchedulerDaemonDown will be firing too."
+
       # Unexpected/unclassified failure across 2+ consecutive hourly runs.
       - alert: NH22ExtractorRunError
         expr: nh22_source_last_run_status{status="UNKNOWN"} == 1
