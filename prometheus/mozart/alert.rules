@@ -56,8 +56,14 @@ groups:
   # Routing: kind=auth -> email (needs a human at a keyboard); kind=data|error -> Slack.
   - name: nh22-extractor
     rules:
-      # Re-auth broken. auth_required stays 1 between runs, so 65m ~= 2 consecutive
-      # hourly runs still failing -> page rather than let data quietly go stale.
+      # Re-auth broken. auth_required is PERSISTED, so it stays 1 between runs rather than only
+      # during them — which is what lets one threshold serve sources on different schedules.
+      #
+      # 65m was picked as ~2 consecutive hourly runs, when every source ran in the 07:00-14:00
+      # hourly window. ascap runs once daily at 05:30, so for it 65m is one failed run, not two.
+      # Left as-is deliberately: waiting for a second ASCAP run means sitting on a broken
+      # credential for 24h, and the auth circuit-breaker already stops the dead session being
+      # re-driven in the meantime. Read the number as a debounce, not a run count.
       - alert: NH22ExtractorAuthRequired
         expr: nh22_source_auth_required == 1
         for: 65m
@@ -67,8 +73,8 @@ groups:
           kind: auth
         annotations:
           summary: "nh22 {{ $labels.source }} needs re-auth"
-          description: "Source '{{ $labels.source }}' has reported AUTH_REQUIRED for 2+ consecutive runs. Scheduled extraction is blocked until you re-authenticate."
-          runbook: "spotify: usually self-heals (scripted TOTP); if a captcha appeared run `docker compose run --rm -p 6080:6080 extractor node src/reauth.mjs spotify`. yts: open the noVNC URL and sign in via `docker compose run --rm -p 6080:6080 extractor node src/reauth.mjs yts`. See nighthawk22-analytics/extractor/RUNBOOK.md."
+          description: "Source '{{ $labels.source }}' is reporting AUTH_REQUIRED and has been for over an hour. Scheduled extraction is blocked until you re-authenticate; the circuit-breaker is holding the browser back until then, so this will not clear on its own."
+          runbook: "Easiest path for any source: open https://nh22-reauth.carroll.live/ — the auto-reauth supervisor spawns a console there within 15 minutes of the failure (07:00-21:59 MT) and waits for you, so there is usually nothing to start by hand. Otherwise, from nighthawk22-analytics: `make reauth SOURCE=<source>`. Per source — spotify: usually self-heals (scripted TOTP), needs a human only if a captcha appeared. yts: sign in at the noVNC URL. ascap: sign in AND clear the SMS code at the noVNC URL; extraction is daily at 05:30 MT, so a fix any time that day is in time for the next run. See nighthawk22-analytics/extractor/RUNBOOK.md and docs/AUTH_AUTOREAUTH.md."
 
       # Data-missing signal: alert only once we're missing MORE THAN 2 DAYS' worth
       # of data. last_success_timestamp advances daily in normal operation (age
