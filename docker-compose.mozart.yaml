@@ -199,6 +199,14 @@ services:
         nh22-analytics-importer-1|10800|nh22-jobs
         nh22-analytics-processor-1|10800|nh22-jobs
         nh22-analytics-extractor-1|108000|nh22-jobs
+        # Daily 05:30 MT (ofelia "extract-ascap"). 30h covers the DST-shifted gap between two
+        # runs; a quarterly source cannot justify anything tighter.
+        nh22-analytics-extractor-ascap-1|108000|nh22-jobs
+        # Every 6h (ofelia "probe-cdbaby"). 9h leaves a run's worth of slack. TEMPORARY, like
+        # the probe itself — remove this line when the longevity question is answered and the
+        # job goes away, or OneShotJobContainerMissing will fire forever on a container that
+        # was retired on purpose.
+        nh22-analytics-probe-cdbaby-1|32400|nh22-jobs
         garmin-analytics-ingest|7200|garmin-jobs
         garmin-workout-progression|28800|garmin-jobs
         garmin-running-shoe-rotation|28800|garmin-jobs
@@ -208,6 +216,26 @@ services:
         hopper-gmail|3600|hopper-jobs
         luiz-car-loan|50400|finance-jobs
         configarr|2700|vpn-jobs
+
+      # The schedulers that START everything above. "container|service", no budget — a daemon
+      # is either up or it is not.
+      #
+      # This is the CAUSE side of the same outage the budgets above catch by effect. On
+      # 2026-07-31 nh22-analytics-ofelia-1 exited 1 on an unparseable config having scheduled
+      # nothing; OneShotJobStale reported the importer and processor late 3.5h later, which was
+      # correct but described two symptoms rather than one cause. It also covers the two cases
+      # the budgets structurally cannot: a scheduler that dies while every job is still inside
+      # its budget, and one that crash-loops without ever running anything.
+      #
+      # Every ofelia on this host is listed, not just nh22's — they all fail the same way, and
+      # the one that is missing from this list is the one whose outage is invisible.
+      SCHEDULER_TARGETS: |
+        nh22-analytics-ofelia-1|nh22-jobs
+        ofelia-dockprom|monitoring
+        ofelia-arr|vpn-jobs
+        ofelia-mcps|mcp-jobs
+        hopper-ofelia|hopper-jobs
+        finance-ofelia|finance-jobs
     volumes:
       # Read-only: this only ever inspects. It never starts, stops or creates anything, which
       # is what lets it hold the socket without being another way to mutate the host.
