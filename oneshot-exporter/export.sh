@@ -32,6 +32,22 @@ INTERVAL="${ONESHOT_INTERVAL:-60}"
 # cannot share one number, and hardcoding a rule per job would drift from the schedules.
 TARGETS="${ONESHOT_TARGETS:-}"
 
+# Schedulers: one "container|service" per line. These are the long-running daemons that START
+# the one-shot jobs above, and they are watched for a different reason.
+#
+# The jobs above are watched by their EFFECT: a dead scheduler makes every one of them go stale,
+# which OneShotJobStale reports accurately — that is how the 2026-07-31 outage was caught, 3.5h
+# in. What it cannot say is WHY. Two jobs going stale independently and "the scheduler exited"
+# are the same picture from the outside, so the reader has to go and find that out, and the
+# alert lands as a warning per job rather than one critical for the host.
+#
+# So this is not redundant coverage, it is the CAUSE next to the symptom. It also closes a real
+# blind spot at the edges: a scheduler that dies while every job happens to be inside its budget
+# is invisible until the budgets expire, and one that crash-loops on a bad config never shows up
+# at all. Ofelia in particular exits 1 on an unparseable config having scheduled nothing, and
+# says so in one line of stderr in a container nobody tails.
+DAEMONS="${SCHEDULER_TARGETS:-}"
+
 log() { echo "[oneshot-exporter] $*" >&2; }
 
 # Docker reports FinishedAt as RFC3339Nano, and the zero value for a container that has never
@@ -101,6 +117,38 @@ build_metrics() {
       echo "oneshot_job_last_exit_code{$lbl} ${exit_code:-0}"
       echo "oneshot_job_last_finish_seconds{$lbl} $(to_epoch "$finished")"
     done
+
+    echo "# HELP scheduler_daemon_present Whether the scheduler's container exists at all."
+    echo "# TYPE scheduler_daemon_present gauge"
+    echo "# HELP scheduler_daemon_running Whether the scheduler is running right now. 0 means nothing it schedules will fire."
+    echo "# TYPE scheduler_daemon_running gauge"
+    echo "# HELP scheduler_daemon_last_exit_code Exit code from the scheduler's last exit; 0 while it is running cleanly."
+    echo "# TYPE scheduler_daemon_last_exit_code gauge"
+    echo "# HELP scheduler_daemon_restart_count Docker's restart counter for the scheduler, for spotting a crash loop."
+    echo "# TYPE scheduler_daemon_restart_count gauge"
+
+    echo "$DAEMONS" | while IFS='|' read -r name service; do
+      [ -n "${name:-}" ] || continue
+      case "$name" in \#*) continue ;; esac
+      name=$(echo "$name" | tr -d ' ')
+      service=$(echo "${service:-unknown}" | tr -d ' ')
+      lbl="container=\"$name\",service=\"$service\""
+
+      if ! state=$(docker inspect -f '{{.State.Running}}|{{.State.ExitCode}}|{{.RestartCount}}' "$name" 2>/dev/null); then
+        echo "scheduler_daemon_present{$lbl} 0"
+        continue
+      fi
+
+      echo "scheduler_daemon_present{$lbl} 1"
+      running=${state%%|*}
+      rest=${state#*|}
+      exit_code=${rest%%|*}
+      restarts=${rest#*|}
+
+      [ "$running" = "true" ] && echo "scheduler_daemon_running{$lbl} 1" || echo "scheduler_daemon_running{$lbl} 0"
+      echo "scheduler_daemon_last_exit_code{$lbl} ${exit_code:-0}"
+      echo "scheduler_daemon_restart_count{$lbl} ${restarts:-0}"
+    done
 }
 
 collect() {
@@ -128,7 +176,11 @@ collect() {
   mv "$tmp" "$OUT_FILE"
 }
 
-log "watching $(echo "$TARGETS" | grep -c . || true) targets, every ${INTERVAL}s -> ${OUT_FILE}"
+# Both counts skip blank and #-commented lines, so the number matches what is actually
+# inspected. (It previously counted every non-empty line, which the comments in the compose
+# target list inflated.)
+count_targets() { echo "$1" | grep -cE '^[[:space:]]*[^#[:space:]]' || true; }
+log "watching $(count_targets "$TARGETS") jobs + $(count_targets "$DAEMONS") schedulers, every ${INTERVAL}s -> ${OUT_FILE}"
 
 while :; do
   # Never exit on a transient Docker hiccup: this process dying is itself an unmonitored

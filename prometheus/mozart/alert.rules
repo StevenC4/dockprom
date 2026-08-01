@@ -56,8 +56,14 @@ groups:
   # Routing: kind=auth -> email (needs a human at a keyboard); kind=data|error -> Slack.
   - name: nh22-extractor
     rules:
-      # Re-auth broken. auth_required stays 1 between runs, so 65m ~= 2 consecutive
-      # hourly runs still failing -> page rather than let data quietly go stale.
+      # Re-auth broken. auth_required is PERSISTED, so it stays 1 between runs rather than only
+      # during them — which is what lets one threshold serve sources on different schedules.
+      #
+      # 65m was picked as ~2 consecutive hourly runs, when every source ran in the 07:00-14:00
+      # hourly window. ascap runs once daily at 05:30, so for it 65m is one failed run, not two.
+      # Left as-is deliberately: waiting for a second ASCAP run means sitting on a broken
+      # credential for 24h, and the auth circuit-breaker already stops the dead session being
+      # re-driven in the meantime. Read the number as a debounce, not a run count.
       - alert: NH22ExtractorAuthRequired
         expr: nh22_source_auth_required == 1
         for: 65m
@@ -67,8 +73,8 @@ groups:
           kind: auth
         annotations:
           summary: "nh22 {{ $labels.source }} needs re-auth"
-          description: "Source '{{ $labels.source }}' has reported AUTH_REQUIRED for 2+ consecutive runs. Scheduled extraction is blocked until you re-authenticate."
-          runbook: "spotify: usually self-heals (scripted TOTP); if a captcha appeared run `docker compose run --rm -p 6080:6080 extractor node src/reauth.mjs spotify`. yts: open the noVNC URL and sign in via `docker compose run --rm -p 6080:6080 extractor node src/reauth.mjs yts`. See nighthawk22-analytics/extractor/RUNBOOK.md."
+          description: "Source '{{ $labels.source }}' is reporting AUTH_REQUIRED and has been for over an hour. Scheduled extraction is blocked until you re-authenticate; the circuit-breaker is holding the browser back until then, so this will not clear on its own."
+          runbook: "Easiest path for any source: open https://nh22-reauth.carroll.live/ — the auto-reauth supervisor spawns a console there within 15 minutes of the failure (07:00-21:59 MT) and waits for you, so there is usually nothing to start by hand. Otherwise, from nighthawk22-analytics: `make reauth SOURCE=<source>`. Per source — spotify: usually self-heals (scripted TOTP), needs a human only if a captcha appeared. yts: sign in at the noVNC URL. ascap: sign in AND clear the SMS code at the noVNC URL; extraction is daily at 05:30 MT, so a fix any time that day is in time for the next run. See nighthawk22-analytics/extractor/RUNBOOK.md and docs/AUTH_AUTOREAUTH.md."
 
       # Data-missing signal: alert only once we're missing MORE THAN 2 DAYS' worth
       # of data. last_success_timestamp advances daily in normal operation (age
@@ -272,6 +278,57 @@ groups:
         annotations:
           summary: "oneshot-exporter metrics are absent entirely"
           description: "No oneshot_jobs.prom at all — the exporter has never run, or the textfile mount is broken. Every scheduled-job alert above is blind."
+
+  # The schedulers themselves, from the same exporter (SCHEDULER_TARGETS).
+  #
+  # The group above watches jobs by their effect, which is sound and did its job on 2026-07-31:
+  # nh22-analytics-ofelia-1 exited 1 on an unparseable config, and OneShotJobStale reported the
+  # importer late at 01:41 and the processor at 01:51 — 3.5h after the scheduler died, correctly,
+  # to email, with no delivery failures. Nothing here is fixing a missed detection.
+  #
+  # What it fixes is that the outage read as "two nh22 jobs are late (warning)" when it was "the
+  # scheduler for this host is dead and NOTHING will fire (critical)". One cause, stated once, at
+  # the severity the blast radius deserves. The two structural gaps are real too: a scheduler that
+  # dies while every job is still inside its budget is invisible until the budgets expire, and one
+  # that crash-loops on a bad config never ran anything to be late in the first place.
+  - name: schedulers
+    rules:
+      # A scheduler that is not running schedules nothing. There is no partial version of this,
+      # which is why it is critical at 10m while a single late job is a warning at 15m.
+      - alert: SchedulerDaemonDown
+        expr: scheduler_daemon_present == 1 and scheduler_daemon_running == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Scheduler {{ $labels.container }} is not running"
+          description: "'{{ $labels.container }}' ({{ $labels.service }}) exists but is stopped, so every job it schedules has silently stopped firing. Expect OneShotJobStale to follow for each of them as their budgets expire."
+          runbook: "`docker logs {{ $labels.container }} | tail -20`. Ofelia exits 1 on a config it cannot parse and says so in ONE line — an unknown key in a [job-run] section (e.g. `entrypoint`) is fatal for EVERY job, not just that one. Validate before restarting: `docker run --rm -v ./ofelia.ini:/etc/ofelia/config.ini:ro mcuadros/ofelia:latest validate --config /etc/ofelia/config.ini`."
+
+      # Distinct from Down: nothing to restart, the container is gone. Same prune failure mode as
+      # OneShotJobContainerMissing, but a scheduler's absence takes its whole stack with it.
+      - alert: SchedulerDaemonMissing
+        expr: scheduler_daemon_present == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Scheduler {{ $labels.container }} does not exist"
+          description: "'{{ $labels.container }}' ({{ $labels.service }}) is not present on the host at all. Every job in that stack is unscheduled."
+          runbook: "`make up` in the owning repo. Unlike the one-shot containers, no ensure-containers job can repair this — ensure-containers is itself run BY the scheduler that is missing."
+
+      # Up, but dying repeatedly. Restarts are cheap to count and this is the shape of a bad
+      # config behind a restart policy: the daemon looks present and even briefly running, so
+      # neither alert above fires, while nothing it schedules ever gets far enough to run.
+      - alert: SchedulerDaemonCrashLooping
+        expr: increase(scheduler_daemon_restart_count[1h]) >= 3
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Scheduler {{ $labels.container }} is crash-looping"
+          description: "'{{ $labels.container }}' ({{ $labels.service }}) has restarted {{ $value }} times in the last hour. It is not staying up long enough to schedule reliably."
+          runbook: "`docker logs {{ $labels.container }} | tail -20` — the same ofelia config-parse note as SchedulerDaemonDown applies."
 
   # Textfile collectors. node_exporter publishes the mtime of every file it reads, which is the
   # only honest staleness signal for a collector: the metrics themselves are re-served on every
