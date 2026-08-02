@@ -148,28 +148,45 @@ groups:
       # ASCAP session keepalive (nh22_ascap_session_*, written by the 24/7
       # keepalive-ascap job, NOT by the extractor's nh22_source_* set).
       #
-      # ASCAP's server-side ma-api session expires on INACTIVITY. Left alone it dies
-      # overnight and the next crawl needs a human login, so a job touches it every
-      # 20 minutes. These rules say whether that is working.
+      # ASCAP's ma-api SESSION cookie has an ABSOLUTE 3h lifetime, not an idle one.
+      # That was measured, not assumed: nh22_ascap_session_longest_observed_seconds
+      # plateaued at exactly 10801s and never moved again, which is the criterion
+      # ascapSession.mjs itself set for "absolute". So the session dies every 3h no
+      # matter what the keepalive does, and a bare `valid == 0` rule alerts on
+      # healthy, self-healing behaviour.
+      #
+      # It did. Between 2026-08-01 and 2026-08-02 this fired 7 times overnight on
+      # routine expiries while extraction was fine, which is most of what made that
+      # night's 26-email flood. A dead session is now only newsworthy if the
+      # extractor is ACTUALLY BLOCKED by it — run-ascap.mjs re-binds the party on
+      # demand, so a dead idle session is normally invisible to the crawl. The
+      # `and on(instance)` gate is the whole fix: both series come from the same
+      # node_exporter textfile collector, so they join on instance.
+      #
+      # What survives this gate is the case worth waking up for: the durable half
+      # (the Cognito RefreshToken) is dead, and no re-bind can recover it.
       #
       # kind=auth, so it routes to nh22-auth (email + Cacau) like every other alert
       # that needs a person at a keyboard — which this does: the only fix is signing
       # in at the Zero Trust console, which auto-reauth will already have spawned.
       - alert: NH22AscapSessionDead
-        expr: nh22_ascap_session_valid == 0
-        for: 45m
+        expr: nh22_ascap_session_valid == 0 and on(instance) nh22_source_auth_required{source="ascap"} == 1
+        for: 90m
         labels:
           severity: critical
           service: nh22-extractor
           kind: auth
         annotations:
-          summary: "nh22 ascap session is dead"
-          description: "The ASCAP keepalive has been failing for 45m+ (2+ consecutive checks). Publishing extraction is blocked until someone signs in, and the session cannot recover on its own."
+          summary: "nh22 ascap session is dead and extraction is blocked"
+          description: "The ASCAP session has been failing for 90m+ AND the extractor is reporting AUTH_REQUIRED, so this is not the routine 3h expiry — the saved credential itself is being rejected and re-binding cannot recover it."
           runbook: "Open https://nh22-reauth.carroll.live/ — auto-reauth spawns the console within 15 minutes (07:00-21:59 MT) and waits. ASCAP needs a password AND an SMS code. If nothing is waiting, run `make reauth SOURCE=ascap` in nighthawk22-analytics."
 
       # The keepalive itself stopped running. Distinct from the session being dead:
-      # here we do not know the session's state at all, and it is quietly idling
-      # toward the expiry the keepalive exists to prevent. 70m = 3 missed ticks.
+      # here we do not know the session's state at all. Since the 3h expiry is
+      # absolute this no longer means "it will idle out" — the session was going to
+      # die on schedule regardless. What is lost is the MEASUREMENT: the credential
+      # monitor is blind, so a genuinely dead RefreshToken would no longer surface.
+      # 70m = 3 missed ticks.
       - alert: NH22AscapKeepaliveStalled
         expr: time() - nh22_ascap_session_last_check_timestamp > 4200
         for: 15m
@@ -179,7 +196,7 @@ groups:
           kind: error
         annotations:
           summary: "nh22 ascap keepalive has stopped checking"
-          description: "No ASCAP session check in over 70 minutes (it runs every 20). The session is unmonitored and will idle out if this persists."
+          description: "No ASCAP session check in over 70 minutes (it runs every 20). The credential is unmonitored — a dead RefreshToken would now go unnoticed until a crawl fails."
           runbook: "`docker logs nh22-analytics-keepalive-ascap-1`. If the container is missing, ensure-containers recreates it at :05; if ofelia itself is down, SchedulerDaemonDown will be firing too."
 
       # Unexpected/unclassified failure across 2+ consecutive hourly runs.

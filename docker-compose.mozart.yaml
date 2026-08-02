@@ -202,11 +202,12 @@ services:
         # Daily 05:30 MT (ofelia "extract-ascap"). 30h covers the DST-shifted gap between two
         # runs; a quarterly source cannot justify anything tighter.
         nh22-analytics-extractor-ascap-1|108000|nh22-jobs
-        # Every 6h (ofelia "probe-cdbaby"). 9h leaves a run's worth of slack. TEMPORARY, like
-        # the probe itself — remove this line when the longevity question is answered and the
-        # job goes away, or OneShotJobContainerMissing will fire forever on a container that
-        # was retired on purpose.
-        nh22-analytics-probe-cdbaby-1|32400|nh22-jobs
+        # probe-cdbaby was retired 2026-08-01 (nighthawk22-analytics ac9ad85) and its watchlist
+        # entry removed 2026-08-02 — one day too late. In between, OneShotJobContainerMissing
+        # fired every 2h against a container that was deleted on purpose, exactly as the note
+        # here warned it would. The lesson is the one at the top of this block: this file is
+        # coupled to schedules in other repos, and retiring a job means editing BOTH in the
+        # same breath. A deletion needs that discipline as much as a cadence change does.
         garmin-analytics-ingest|7200|garmin-jobs
         garmin-workout-progression|28800|garmin-jobs
         garmin-running-shoe-rotation|28800|garmin-jobs
