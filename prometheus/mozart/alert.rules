@@ -74,7 +74,7 @@ groups:
         annotations:
           summary: "nh22 {{ $labels.source }} needs re-auth"
           description: "Source '{{ $labels.source }}' is reporting AUTH_REQUIRED and has been for over an hour. Scheduled extraction is blocked until you re-authenticate; the circuit-breaker is holding the browser back until then, so this will not clear on its own."
-          runbook: "Easiest path for any source: open https://nh22-reauth.carroll.live/ — the auto-reauth supervisor spawns a console there within 15 minutes of the failure (07:00-21:59 MT) and waits for you, so there is usually nothing to start by hand. Otherwise, from nighthawk22-analytics: `make reauth SOURCE=<source>`. Per source — spotify: usually self-heals (scripted TOTP), needs a human only if a captcha appeared. yts: sign in at the noVNC URL. ascap: sign in AND clear the SMS code at the noVNC URL; extraction is daily at 05:30 MT, so a fix any time that day is in time for the next run. See nighthawk22-analytics/extractor/RUNBOOK.md and docs/AUTH_AUTOREAUTH.md."
+          runbook: "Easiest path for any source: open https://nh22-reauth.stevenc4.com/ — the auto-reauth supervisor spawns a console there within 15 minutes of the failure (07:00-21:59 MT) and waits for you, so there is usually nothing to start by hand. Otherwise, from nighthawk22-analytics: `make reauth SOURCE=<source>`. Per source — spotify: usually self-heals (scripted TOTP), needs a human only if a captcha appeared. yts: sign in at the noVNC URL. ascap: sign in AND clear the SMS code at the noVNC URL; extraction is daily at 05:30 MT, so a fix any time that day is in time for the next run. See nighthawk22-analytics/extractor/RUNBOOK.md and docs/AUTH_AUTOREAUTH.md."
 
       # Data-missing signal: alert only once we're missing MORE THAN 2 DAYS' worth
       # of data. last_success_timestamp advances daily in normal operation (age
@@ -179,7 +179,7 @@ groups:
         annotations:
           summary: "nh22 ascap session is dead and extraction is blocked"
           description: "The ASCAP session has been failing for 90m+ AND the extractor is reporting AUTH_REQUIRED, so this is not the routine 3h expiry — the saved credential itself is being rejected and re-binding cannot recover it."
-          runbook: "Open https://nh22-reauth.carroll.live/ — auto-reauth spawns the console within 15 minutes (07:00-21:59 MT) and waits. ASCAP needs a password AND an SMS code. If nothing is waiting, run `make reauth SOURCE=ascap` in nighthawk22-analytics."
+          runbook: "Open https://nh22-reauth.stevenc4.com/ — auto-reauth spawns the console within 15 minutes (07:00-21:59 MT) and waits. ASCAP needs a password AND an SMS code. If nothing is waiting, run `make reauth SOURCE=ascap` in nighthawk22-analytics."
 
       # The keepalive itself stopped running. Distinct from the session being dead:
       # here we do not know the session's state at all. Since the 3h expiry is
