@@ -60,12 +60,27 @@ groups:
       # during them — which is what lets one threshold serve sources on different schedules.
       #
       # 65m was picked as ~2 consecutive hourly runs, when every source ran in the 07:00-14:00
-      # hourly window. ascap runs once daily at 05:30, so for it 65m is one failed run, not two.
-      # Left as-is deliberately: waiting for a second ASCAP run means sitting on a broken
-      # credential for 24h, and the auth circuit-breaker already stops the dead session being
-      # re-driven in the meantime. Read the number as a debounce, not a run count.
+      # hourly window. Read the number as a debounce, not a run count.
+      #
+      # EXCLUDES ascap and cdbaby (source!~"ascap|cdbaby"). Both crawl once (cdbaby: twice, see
+      # ofelia.ini's 09:20 retry) a day, and nh22_source_auth_required for a once/twice-daily
+      # source is only WRITTEN on that run — so after a human fixes the credential mid-day, this
+      # persisted gauge sits at 1, unrewritten, until tomorrow's crawl. A bare rule on it pages
+      # for up to ~24h against an already-fixed system. That is not hypothetical for cdbaby: on
+      # 2026-08-05 the session was valid with 719h of credential left while the gauge still read
+      # 1. ascap has the identical exposure — same once-a-day write, same persisted gauge — so it
+      # is excluded here too, not left on this rule as previously reasoned. Both get a dedicated
+      # alert below (NH22AscapSessionDead, NH22CdbabySessionDead) that ANDs this same gauge
+      # against a session-validity signal measured independently every 10-20 minutes by that
+      # source's 24/7 keepalive, so a session the keepalive can currently see as valid clears the
+      # page immediately instead of waiting for the next scheduled crawl to overwrite the gauge.
+      # spotify and yts stay on this bare rule unmodified: they run hourly in the 07:00-14:00
+      # window, so the gauge is never more than about an hour stale and 65m is a real debounce,
+      # not a wait for tomorrow. A future source with no dedicated gate defaults onto this rule
+      # too, same as NH22ExtractorNotExtracting's bare arm below — only a source that has earned
+      # its own session-validity carve-out gets excluded.
       - alert: NH22ExtractorAuthRequired
-        expr: nh22_source_auth_required == 1
+        expr: nh22_source_auth_required{source!~"ascap|cdbaby"} == 1
         for: 65m
         labels:
           severity: critical
@@ -181,6 +196,47 @@ groups:
           description: "The ASCAP session has been failing for 90m+ AND the extractor is reporting AUTH_REQUIRED, so this is not the routine 3h expiry — the saved credential itself is being rejected and re-binding cannot recover it."
           runbook: "Open https://nh22-reauth.stevenc4.com/ — auto-reauth spawns the console within 15 minutes (07:00-21:59 MT) and waits. ASCAP needs a password AND an SMS code. If nothing is waiting, run `make reauth SOURCE=ascap` in nighthawk22-analytics."
 
+      # CD Baby session keepalive (nh22_cdbaby_session_*, written by the 24/7
+      # keepalive-cdbaby job, NOT by the extractor's nh22_source_* set) — the CD Baby
+      # half of the exclusion above, mirroring NH22AscapSessionDead exactly.
+      #
+      # The failure mode here is different from ASCAP's routine-3h-expiry flood, but
+      # the fix is the same shape. extract-cdbaby runs once (twice since the 09:20
+      # retry in ofelia.ini) a day, and nh22_source_auth_required{source="cdbaby"}
+      # is written ONLY on that run. So once a human re-authenticates mid-day, the
+      # persisted gauge does not clear until the next scheduled crawl overwrites it
+      # — observed live on 2026-08-05: keepalive-cdbaby reported a valid session with
+      # 719h of credential left while nh22_source_auth_required{source="cdbaby"}
+      # still read 1. Left on the bare NH22ExtractorAuthRequired rule, that is a
+      # guaranteed ~24h false page against an already-fixed system.
+      #
+      # The `and on(instance)` gate is the fix: AND the persisted, possibly-stale
+      # auth_required flag against nh22_cdbaby_session_valid, which the keepalive
+      # re-measures every 10 minutes independently of the crawl. A session the
+      # keepalive can currently read as valid clears this alert immediately, without
+      # waiting for tomorrow's run to rewrite the stale gauge. What survives the gate
+      # is the case worth waking up for: auth_required is set AND the much-more-
+      # frequently-sampled keepalive agrees the session is actually dead right now.
+      #
+      # for: 90m matches NH22AscapSessionDead's debounce. keepalive-cdbaby's 10-minute
+      # cadence (vs. ascap's 20) settles nh22_cdbaby_session_valid well inside that,
+      # so 90m is headroom against flapping, not a wait for enough samples.
+      #
+      # kind=auth, routing to nh22-auth (email + Cacau) like every other alert that
+      # needs a person at a keyboard — which this does: the only fix is signing in,
+      # which auto-reauth will already have spawned a console for.
+      - alert: NH22CdbabySessionDead
+        expr: nh22_cdbaby_session_valid == 0 and on(instance) nh22_source_auth_required{source="cdbaby"} == 1
+        for: 90m
+        labels:
+          severity: critical
+          service: nh22-extractor
+          kind: auth
+        annotations:
+          summary: "nh22 cdbaby session is dead and extraction is blocked"
+          description: "The CD Baby session has been failing for 90m+ AND the extractor is reporting AUTH_REQUIRED, so this is a genuine block rather than the persisted-gauge staleness a once/twice-daily source leaves behind after being fixed."
+          runbook: "Open https://nh22-reauth.stevenc4.com/ — auto-reauth spawns the console within 15 minutes (07:00-21:59 MT) and waits. If nothing is waiting, run `make reauth SOURCE=cdbaby` in nighthawk22-analytics."
+
       # The keepalive itself stopped running. Distinct from the session being dead:
       # here we do not know the session's state at all. Since the 3h expiry is
       # absolute this no longer means "it will idle out" — the session was going to
@@ -198,6 +254,38 @@ groups:
           summary: "nh22 ascap keepalive has stopped checking"
           description: "No ASCAP session check in over 70 minutes (it runs every 20). The credential is unmonitored — a dead RefreshToken would now go unnoticed until a crawl fails."
           runbook: "`docker logs nh22-analytics-keepalive-ascap-1`. If the container is missing, ensure-containers recreates it at :05; if ofelia itself is down, SchedulerDaemonDown will be firing too."
+
+      # THIS RULE IS WHAT KEEPS NH22CdbabySessionDead HONEST — it is not merely the
+      # cdbaby twin of the ascap rule above.
+      #
+      # NH22CdbabySessionDead gates the CD Baby auth page on
+      # `nh22_cdbaby_session_valid == 0`, which fixed a real problem (the
+      # once-a-day auth_required gauge stays stuck at 1 for ~24h after a human has
+      # already re-authenticated). But gating an alert on a metric makes the alert
+      # only as reliable as that metric's publisher. If keepalive-cdbaby stops
+      # writing, nh22_cdbaby_session_valid goes absent, `== 0` can never match, and
+      # CD Baby auth failures page NOBODY — a strictly worse failure than the
+      # 24h-of-noise problem the gate was added to solve, because it is silent.
+      # ascap has carried this same structural dependency all along and is
+      # backstopped by NH22AscapKeepaliveStalled above; cdbaby acquired the gate on
+      # 2026-08-05 without the backstop, so this closes it in the same change.
+      #
+      # 40m = 4 missed ticks at the 10-minute cadence in ofelia.ini (ascap's 70m is
+      # ~3.5 ticks at 20m). Deliberately more than 3 ticks: a tick that collides
+      # with a running crawl logs "a scrape is in progress — skipping this tick" and
+      # does NOT advance the timestamp, so a legitimately busy morning can drop two
+      # in a row without anything being wrong.
+      - alert: NH22CdbabyKeepaliveStalled
+        expr: time() - nh22_cdbaby_session_last_check_timestamp > 2400
+        for: 15m
+        labels:
+          severity: warning
+          service: nh22-extractor
+          kind: error
+        annotations:
+          summary: "nh22 cdbaby keepalive has stopped checking"
+          description: "No CD Baby session check in over 40 minutes (it runs every 10). NH22CdbabySessionDead is gated on nh22_cdbaby_session_valid and is therefore DISARMED while this fires — a dead CD Baby session will not page until this is fixed."
+          runbook: "`docker logs nh22-analytics-keepalive-cdbaby-1`. If the container is missing, ensure-containers recreates it at :05; if ofelia itself is down, SchedulerDaemonDown will be firing too. Until this clears, check CD Baby auth by hand: `docker compose run --rm extractor node src/run.mjs --sources cdbaby --dry-run` or just watch for the 06:20/09:20 crawl's own AUTH_REQUIRED log line."
 
       # Unexpected/unclassified failure across 2+ consecutive hourly runs.
       - alert: NH22ExtractorRunError
