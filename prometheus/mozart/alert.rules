@@ -287,6 +287,38 @@ groups:
           description: "No CD Baby session check in over 40 minutes (it runs every 10). NH22CdbabySessionDead is gated on nh22_cdbaby_session_valid and is therefore DISARMED while this fires — a dead CD Baby session will not page until this is fixed."
           runbook: "`docker logs nh22-analytics-keepalive-cdbaby-1`. If the container is missing, ensure-containers recreates it at :05; if ofelia itself is down, SchedulerDaemonDown will be firing too. Until this clears, check CD Baby auth by hand: `docker compose run --rm extractor node src/run.mjs --sources cdbaby --dry-run` or just watch for the 06:20/09:20 crawl's own AUTH_REQUIRED log line."
 
+      # The reauth reminder — the proactive "cdb.auth is running out" nudge, daily at
+      # 05:10 MT (nighthawk22-analytics ofelia.ini, "reauth-reminder-cdbaby"). It writes
+      # nh22_cdbaby_reauth_reminder.prom on EVERY run including quiet ones, so file mtime
+      # is a true liveness signal rather than a signal of having something to say.
+      #
+      # It needs a rule of its own because the generic TextfileCollectorStale catch-all
+      # cannot cover it: that rule's threshold is 1h, and a once-a-day writer is "stale"
+      # by that definition for ~23 hours out of every 24. From 2026-08-05, when this
+      # collector first appeared, that produced a warning every single day — roughly ten
+      # emails a day at the default 2h repeat_interval — describing a job that was
+      # working perfectly. The file is excluded from the catch-all below in the same
+      # change; the exclusion and this rule are one unit and neither is correct alone.
+      #
+      # 30h, matching the budget convention used for the other daily nh22 jobs in
+      # ONESHOT_TARGETS: it covers a DST-shifted gap between two 05:10 runs and still
+      # catches a genuinely missed day well before the next one.
+      #
+      # Silence here is not cosmetic. This reminder is the only thing that warns a ~30-day
+      # credential is expiring while there is still a working session to fix it from; if
+      # it stops running, the first sign is a crawl that fails on dead auth.
+      - alert: NH22CdbabyReauthReminderStale
+        expr: time() - node_textfile_mtime_seconds{file=~"(.*/)?nh22_cdbaby_reauth_reminder\\.prom"} > 108000
+        for: 30m
+        labels:
+          severity: warning
+          service: nh22-extractor
+          kind: error
+        annotations:
+          summary: "nh22 cdbaby reauth reminder has stopped running"
+          description: "nh22_cdbaby_reauth_reminder.prom has not been written in over 30 hours (the job runs daily at 05:10 MT and writes on every run). The proactive warning that the CD Baby credential is expiring is not being produced — the next sign of an expiring credential will be a crawl that fails on it."
+          runbook: "`docker logs nh22-analytics-reauth-reminder-cdbaby-1` and check ./logs/ofelia in nighthawk22-analytics. If the container is missing, ensure-containers recreates it at :05; if ofelia itself is down, SchedulerDaemonDown will be firing too."
+
       # Unexpected/unclassified failure across 2+ consecutive hourly runs.
       - alert: NH22ExtractorRunError
         expr: nh22_source_last_run_status{status="UNKNOWN"} == 1
@@ -379,14 +411,39 @@ groups:
 
       # The container exists but has never completed a run. Distinct from stale: this is what a
       # freshly recreated container looks like if the schedule that should start it is broken.
+      #
+      # "Never ran" is only evidence of a fault once the job has HAD a chance to run, and how
+      # long that takes is the job's own cadence — so this compares container age against the
+      # same per-job budget OneShotJobStale uses, rather than the flat 2h it used to. The two
+      # rules now share one definition of late and stay consistent by construction.
+      #
+      # Without that gate this rule is unsound for anything slower than its timer, because
+      # Docker resets FinishedAt to the zero value on recreation: a rebuild, a `compose up
+      # --force-recreate`, or ensure-containers replacing a pruned container all make a job
+      # that has run for years look like it has never run. Observed on 2026-08-05, when both
+      # garmin fitness reports were recreated at 15:52: the weekly warned every 2h until the
+      # following Sunday and the monthly would have kept warning until 1 September — ~300
+      # emails about two containers that were exactly where they should be, waiting for a
+      # schedule. The budgets absorb this correctly (216h weekly against a 7-day cadence, 840h
+      # monthly against 31 days) while still catching a container that genuinely never starts.
+      #
+      # oneshot_job_created_seconds is emitted by the exporter for this rule. If it is ever
+      # absent the `and` matches nothing and this rule silently stops firing rather than
+      # reverting to the old behaviour — that is the tradeoff of a gated alert, and the same
+      # one NH22CdbabySessionDead carries. The backstop is that the exporter publishes it for
+      # every target in the same loop as oneshot_job_present, so it cannot go missing for one
+      # job alone, and an exporter that stops writing entirely trips OneShotExporterStale.
       - alert: OneShotJobNeverRan
-        expr: oneshot_job_present == 1 and oneshot_job_last_finish_seconds == 0
+        expr: |
+          oneshot_job_present == 1
+            and oneshot_job_last_finish_seconds == 0
+            and (time() - oneshot_job_created_seconds) > oneshot_job_max_age_seconds
         for: 2h
         labels:
           severity: warning
         annotations:
           summary: "Scheduled job {{ $labels.container }} has never run"
-          description: "'{{ $labels.container }}' ({{ $labels.service }}) exists but has no completed run. If ensure-containers recreated it, the schedule that should start it may not be firing."
+          description: "'{{ $labels.container }}' ({{ $labels.service }}) exists but has no completed run, and has now existed for longer than its own staleness budget — so it is past the point where its schedule should have started it at least once. If ensure-containers recreated it, the schedule that should start it may not be firing."
 
       # Last completed run failed. The metric persists between runs, so this stays firing until
       # a subsequent run succeeds — which is the intent: a job failing every hour should not
@@ -496,12 +553,25 @@ groups:
       # collector at all, not to pin down cadence. The tightly-scoped rules above are excluded
       # so a single failure does not produce two alerts, and nh22_extractor.prom is excluded
       # because it legitimately goes ~17h between writes overnight and has its own alert group.
+      #
+      # nh22_cdbaby_reauth_reminder.prom is excluded on the same grounds and covered by
+      # NH22CdbabyReauthReminderStale: it is written once a day at 05:10 MT, so under a 1h
+      # threshold it was "stale" ~23 hours out of every 24 and warned daily, from the day the
+      # collector was added (2026-08-05) until this exclusion.
+      #
+      # THAT IS THE STANDING HAZARD IN THIS RULE, not a one-off: the 1h threshold silently
+      # assumes every collector in this directory writes at least hourly, and nothing enforces
+      # that assumption at the point where a new collector is added. Any new writer with a
+      # cadence slower than an hour lands here by default and pages every day until someone
+      # notices. Adding a collector to this directory means deciding, in the same change,
+      # whether it belongs on this rule or needs its own — an exclusion without a replacement
+      # rule is not a fix, it is an unmonitored collector.
       - alert: TextfileCollectorStale
         # The doubled backslashes are required and are NOT a typo. This is an unquoted YAML
         # scalar, so `\\.` reaches PromQL verbatim; PromQL then unescapes the string literal to
         # `\.` for the regex engine. A single `\.` here is a PromQL parse error ("unknown escape
         # sequence"), which takes the whole rules file down, not just this rule.
-        expr: time() - node_textfile_mtime_seconds{file!~"(.*/)?(zfs-metrics|oneshot_jobs|nh22_extractor)\\.prom"} > 3600
+        expr: time() - node_textfile_mtime_seconds{file!~"(.*/)?(zfs-metrics|oneshot_jobs|nh22_extractor|nh22_cdbaby_reauth_reminder)\\.prom"} > 3600
         for: 30m
         labels:
           severity: warning

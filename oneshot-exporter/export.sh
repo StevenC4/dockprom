@@ -89,6 +89,8 @@ build_metrics() {
     echo "# TYPE oneshot_job_last_exit_code gauge"
     echo "# HELP oneshot_job_max_age_seconds Staleness budget for this job, derived from its schedule."
     echo "# TYPE oneshot_job_max_age_seconds gauge"
+    echo "# HELP oneshot_job_created_seconds Unix time the job's container was created."
+    echo "# TYPE oneshot_job_created_seconds gauge"
 
     echo "$TARGETS" | while IFS='|' read -r name max_age service; do
       [ -n "${name:-}" ] || continue
@@ -100,7 +102,16 @@ build_metrics() {
 
       echo "oneshot_job_max_age_seconds{$lbl} $max_age"
 
-      if ! state=$(docker inspect -f '{{.State.Running}}|{{.State.ExitCode}}|{{.State.FinishedAt}}' "$name" 2>/dev/null); then
+      # .Created is read alongside the run state because "has never finished" is not on its own
+      # an actionable statement about a one-shot: a container recreated an hour ago and a
+      # container recreated last month look identical through FinishedAt, and only the second
+      # one is a problem. Publishing creation time lets OneShotJobNeverRan ask how long the
+      # container has been waiting and compare that against the job's own budget, instead of
+      # against a flat timer that no long-cadence job can satisfy. See that rule for the
+      # observed failure: a rebuild on 2026-08-05 reset FinishedAt on the weekly and monthly
+      # garmin reports, which then warned every 2h against schedules that were days and weeks
+      # away — the monthly would have kept going until September.
+      if ! state=$(docker inspect -f '{{.State.Running}}|{{.State.ExitCode}}|{{.State.FinishedAt}}|{{.Created}}' "$name" 2>/dev/null); then
         # The container does not exist. This is the prune failure mode, and it is the single
         # most important line in this file: it is the state that was invisible for 9 days.
         echo "oneshot_job_present{$lbl} 0"
@@ -111,11 +122,14 @@ build_metrics() {
       running=${state%%|*}
       rest=${state#*|}
       exit_code=${rest%%|*}
-      finished=${rest#*|}
+      rest=${rest#*|}
+      finished=${rest%%|*}
+      created=${rest#*|}
 
       [ "$running" = "true" ] && echo "oneshot_job_running{$lbl} 1" || echo "oneshot_job_running{$lbl} 0"
       echo "oneshot_job_last_exit_code{$lbl} ${exit_code:-0}"
       echo "oneshot_job_last_finish_seconds{$lbl} $(to_epoch "$finished")"
+      echo "oneshot_job_created_seconds{$lbl} $(to_epoch "$created")"
     done
 
     echo "# HELP scheduler_daemon_present Whether the scheduler's container exists at all."
