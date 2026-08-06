@@ -319,6 +319,49 @@ groups:
           description: "nh22_cdbaby_reauth_reminder.prom has not been written in over 30 hours (the job runs daily at 05:10 MT and writes on every run). The proactive warning that the CD Baby credential is expiring is not being produced — the next sign of an expiring credential will be a crawl that fails on it."
           runbook: "`docker logs nh22-analytics-reauth-reminder-cdbaby-1` and check ./logs/ofelia in nighthawk22-analytics. If the container is missing, ensure-containers recreates it at :05; if ofelia itself is down, SchedulerDaemonDown will be firing too."
 
+      # The reminder ran and had something to say, and could not say it. This is the
+      # failure the reminder was built to make impossible: the direct-to-Slack post it
+      # replaced was silently broken for 9 days in July 2026, and this rule is what
+      # stops the replacement inheriting that property.
+      #
+      # BOTH conjuncts are required. delivery_success is 0 on a quiet run too — a run
+      # with nothing to post reports attempted=0, success=0 — so the bare
+      # `delivery_success == 0` would fire every day the credential was perfectly
+      # healthy. That is the same shape as the two false positives fixed on 2026-08-06
+      # and it is worth naming here so it is not "simplified" back in later.
+      #
+      # attempted=1 is set BEFORE the token check in reauth-reminder.mjs, so this covers
+      # all three delivery failures, including the one that never reaches Slack at all:
+      # an unset SLACK_BOT_TOKEN, a revoked/invalid one, and a bot that was never invited
+      # to the channel (not_in_channel). The job also exits 1 in exactly these cases.
+      #
+      # ROUTED TO EMAIL AND SLACK, via kind=auth, deliberately. This fires precisely when
+      # a Slack post failed, so a Slack-only route risks the closed loop that
+      # `service="alerting"` exists to avoid. The two paths are not the same integration
+      # — the reminder uses a bot token and chat.postMessage, Alertmanager uses an
+      # incoming webhook — so the Slack copy usually still lands, and for the most likely
+      # causes (revoked token, uninvited bot) it certainly does. But "usually" is not
+      # something to route an alert on, hence the email. kind=auth is the only route that
+      # yields both receivers, and it is a fair description: the fix is a human at a
+      # keyboard repairing a credential.
+      #
+      # KNOWN GAP, accepted: the metric is rewritten on every run, so if the next day's
+      # run has nothing to post (cooldown, or a band that dropped) this resolves while
+      # the integration is still broken. Latching it would need state the reminder does
+      # not publish. It re-fires the next time there is something to say, which is also
+      # the next time it matters.
+      - alert: NH22CdbabyReauthReminderUndelivered
+        expr: nh22_cdbaby_reauth_reminder_post_attempted == 1 and nh22_cdbaby_reauth_reminder_delivery_success == 0
+        for: 15m
+        labels:
+          severity: critical
+          service: nh22-extractor
+          kind: auth
+        annotations:
+          summary: "nh22 cdbaby reauth reminder could not deliver its warning"
+          description: "The reminder decided the CD Baby credential needs attention and failed to post it to Slack. The warning that a ~30-day credential is expiring has been produced and thrown away — nobody has been told, and the next sign will be a crawl failing on dead auth."
+          runbook: "`docker logs nh22-analytics-reauth-reminder-cdbaby-1` names the exact cause. not_in_channel: `/invite` the bot to the channel. invalid_auth/token_revoked or an unset token: fix SLACK_BOT_TOKEN in nighthawk22-analytics/.env. Then check the credential by hand — `nh22_cdbaby_reauth_reminder_seconds_left` says how long is left — and re-auth via `make reauth SOURCE=cdbaby` if it is short."
+
       # Unexpected/unclassified failure across 2+ consecutive hourly runs.
       - alert: NH22ExtractorRunError
         expr: nh22_source_last_run_status{status="UNKNOWN"} == 1

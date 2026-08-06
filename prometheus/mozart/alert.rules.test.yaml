@@ -1,0 +1,145 @@
+# promtool unit tests for the rules that have a "fires when nothing is wrong" failure mode.
+#
+# Not every rule is covered here and that is deliberate — these three are the ones where the
+# alert's correctness depends on a GATE rather than on a threshold, and a gate is exactly the
+# thing that looks redundant to a later reader and gets simplified away. Each test therefore
+# asserts BOTH directions: silent on the healthy state that previously paged, and still firing
+# on the fault the rule exists to catch. A test that only asserted silence would be passed
+# perfectly by a rule that had been deleted.
+#
+# Run: make test-alert-rules
+rule_files:
+  - alert.rules
+
+evaluation_interval: 1m
+
+tests:
+  # ---------------------------------------------------------------------------
+  # NH22CdbabyReauthReminderUndelivered
+  #
+  # delivery_success is 0 on a quiet run as well as a failed one, so the rule is only correct
+  # because of the post_attempted conjunct. Observed live on 2026-08-06: band=0 with 29 days
+  # of credential left, and delivery_success=0 — the ungated rule would have paged on that.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    name: reminder ran with nothing to say - must stay silent
+    input_series:
+      - series: 'nh22_cdbaby_reauth_reminder_post_attempted'
+        values: '0x60'
+      - series: 'nh22_cdbaby_reauth_reminder_delivery_success'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: NH22CdbabyReauthReminderUndelivered
+        exp_alerts: []
+
+  - interval: 1m
+    name: reminder tried to post and Slack refused - must fire
+    input_series:
+      - series: 'nh22_cdbaby_reauth_reminder_post_attempted'
+        values: '1x60'
+      - series: 'nh22_cdbaby_reauth_reminder_delivery_success'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: NH22CdbabyReauthReminderUndelivered
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: nh22-extractor
+              kind: auth
+            exp_annotations:
+              summary: "nh22 cdbaby reauth reminder could not deliver its warning"
+              description: "The reminder decided the CD Baby credential needs attention and failed to post it to Slack. The warning that a ~30-day credential is expiring has been produced and thrown away — nobody has been told, and the next sign will be a crawl failing on dead auth."
+              runbook: "`docker logs nh22-analytics-reauth-reminder-cdbaby-1` names the exact cause. not_in_channel: `/invite` the bot to the channel. invalid_auth/token_revoked or an unset token: fix SLACK_BOT_TOKEN in nighthawk22-analytics/.env. Then check the credential by hand — `nh22_cdbaby_reauth_reminder_seconds_left` says how long is left — and re-auth via `make reauth SOURCE=cdbaby` if it is short."
+
+  - interval: 1m
+    name: reminder posted successfully - must stay silent
+    input_series:
+      - series: 'nh22_cdbaby_reauth_reminder_post_attempted'
+        values: '1x60'
+      - series: 'nh22_cdbaby_reauth_reminder_delivery_success'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: NH22CdbabyReauthReminderUndelivered
+        exp_alerts: []
+
+  # ---------------------------------------------------------------------------
+  # OneShotJobNeverRan
+  #
+  # Docker resets FinishedAt on recreation, so last_finish=0 is ambiguous on its own. The gate
+  # is container age against the job's own budget. Both jobs below look identical through
+  # last_finish; only the second one is a fault.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    name: monthly report recreated well inside its budget - must stay silent
+    input_series:
+      - series: 'oneshot_job_present{container="garmin-fitness-report-monthly",service="garmin-jobs"}'
+        values: '1x300'
+      - series: 'oneshot_job_last_finish_seconds{container="garmin-fitness-report-monthly",service="garmin-jobs"}'
+        values: '0x300'
+      - series: 'oneshot_job_created_seconds{container="garmin-fitness-report-monthly",service="garmin-jobs"}'
+        values: '0x300'
+      - series: 'oneshot_job_max_age_seconds{container="garmin-fitness-report-monthly",service="garmin-jobs"}'
+        values: '3024000x300'
+    alert_rule_test:
+      - eval_time: 4h
+        alertname: OneShotJobNeverRan
+        exp_alerts: []
+
+  - interval: 1m
+    name: job that has existed far past its budget without ever running - must fire
+    input_series:
+      - series: 'oneshot_job_present{container="hopper-gmail",service="hopper-jobs"}'
+        values: '1x300'
+      - series: 'oneshot_job_last_finish_seconds{container="hopper-gmail",service="hopper-jobs"}'
+        values: '0x300'
+      - series: 'oneshot_job_created_seconds{container="hopper-gmail",service="hopper-jobs"}'
+        values: '0x300'
+      - series: 'oneshot_job_max_age_seconds{container="hopper-gmail",service="hopper-jobs"}'
+        values: '3600x300'
+    alert_rule_test:
+      - eval_time: 4h
+        alertname: OneShotJobNeverRan
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              container: hopper-gmail
+              service: hopper-jobs
+            exp_annotations:
+              summary: "Scheduled job hopper-gmail has never run"
+              description: "'hopper-gmail' (hopper-jobs) exists but has no completed run, and has now existed for longer than its own staleness budget — so it is past the point where its schedule should have started it at least once. If ensure-containers recreated it, the schedule that should start it may not be firing."
+
+  # ---------------------------------------------------------------------------
+  # TextfileCollectorStale
+  #
+  # The 1h catch-all against a collector that legitimately writes once a day. The exclusion is
+  # the fix; the second case proves the catch-all still covers everything else.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    name: daily reauth reminder file is excluded from the 1h catch-all
+    input_series:
+      - series: 'node_textfile_mtime_seconds{file="/textfile_collector/nh22_cdbaby_reauth_reminder.prom",instance="nodeexporter:9100"}'
+        values: '0x300'
+    alert_rule_test:
+      - eval_time: 4h
+        alertname: TextfileCollectorStale
+        exp_alerts: []
+
+  - interval: 1m
+    name: an unrecognised collector going stale is still caught
+    input_series:
+      - series: 'node_textfile_mtime_seconds{file="/textfile_collector/watchtower.prom",instance="nodeexporter:9100"}'
+        values: '0x300'
+    alert_rule_test:
+      - eval_time: 4h
+        alertname: TextfileCollectorStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              file: /textfile_collector/watchtower.prom
+              instance: nodeexporter:9100
+            exp_annotations:
+              summary: "Textfile collector /textfile_collector/watchtower.prom has stopped updating"
+              description: "/textfile_collector/watchtower.prom has not been written in over an hour. Its metrics are frozen at their last values rather than absent, so they will look healthy."
