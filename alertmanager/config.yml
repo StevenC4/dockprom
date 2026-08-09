@@ -58,6 +58,35 @@ route:
             receiver: 'nh22-auth'
             repeat_interval: 1h
 
+          # Data staleness repeats DAILY, not on the 2h global default.
+          #
+          # These two rules watch nh22_source_last_success_timestamp, which only moves
+          # when a scheduled crawl completes. cdbaby crawls at 06:20 and retries at
+          # 09:20 MT (ofelia.ini, extract-cdbaby / extract-cdbaby-retry) — so outside a
+          # 3-hour morning window the input to this alert physically cannot change. At
+          # the inherited 2h repeat that produced 12 identical Slack posts over the
+          # 23.7h cdbaby was firing on 2026-08-08/09, of which 11 carried no information
+          # that was not in the first.
+          #
+          # Both firings were TRUE — cdbaby really had lost >2 days of data to dead auth.
+          # This is not a false positive being silenced; it is one true alert being
+          # delivered once per opportunity to change instead of twelve times per day.
+          #
+          # NB repeat_interval is measured from the last notification, not the wall
+          # clock, so the daily repeat lands at whatever time the alert first fired —
+          # it is not guaranteed to arrive after the 09:20 retry. Once a day at an
+          # arbitrary hour is the property being bought here, not a scheduled digest.
+          #
+          # This covers NH22DataStaleCritical (>3 days) as well as the >2 day warning.
+          # Deliberate: the escalation reads the same gauge on the same cadence, so a
+          # faster repeat there would be equally uninformative — a broken pipeline
+          # needs a human, and nagging every 2h is what taught the reader to swipe
+          # these away in the first place.
+          - matchers:
+              - kind="data"
+            receiver: 'nh22-slack'
+            repeat_interval: 24h
+
 receivers:
   - name: 'email'
     email_configs:
