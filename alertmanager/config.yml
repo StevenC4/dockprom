@@ -87,6 +87,42 @@ route:
             receiver: 'nh22-slack'
             repeat_interval: 24h
 
+          # Anything whose INPUT can only move once a day repeats once a day.
+          #
+          # Generalises the kind="data" rule above. A rule opts in by carrying cadence=daily,
+          # which is an assertion about the signal it reads: the job that writes it runs daily
+          # or slower, so between those runs the alert physically cannot say anything new.
+          # Repeating faster than the writer only reprints a value nobody has had the chance
+          # to change. As of 2026-08-12 three rules opt in — NH22ExtractorRunError,
+          # NH22ExtractorNotExtracting, NH22CdbabyReauthReminderStale.
+          #
+          # The label is OPT-IN, not opt-out, and that direction is the point: a new rule with
+          # no cadence label falls through to the 2h default. Too noisy is recoverable, too
+          # quiet is how the July 2026 outage ran for 9 days.
+          #
+          # Prompted by NH22ExtractorRunError[ascap] on 2026-08-11: one run failed on a
+          # transient "token refresh unreachable", the last-run gauge stayed UNKNOWN for the
+          # 23.9h until the next daily run, and the 2h default turned that into 12 identical
+          # posts — 11 of which reported a value with no way to have moved.
+          #
+          # DELIBERATELY NOT matched on kind="error" wholesale, though that was the obvious
+          # one-liner. Four of the seven kind=error rules read fast-moving signals and two of
+          # those are load-bearing backstops that must stay loud:
+          #   NH22CdbabyKeepaliveStalled  - while it fires, NH22CdbabySessionDead is DISARMED
+          #                                 (gated on a gauge that has stopped being written),
+          #                                 so CD Baby auth failures page nobody
+          #   NH22AscapKeepaliveStalled   - same shape; the credential is unmonitored
+          #   NH22ExtractorMetricsMissing - absent() over every source; any one of them writing
+          #                                 clears it, and a total blackout is the worst moment
+          #                                 to go quiet for a day
+          #   NH22ExtractorNotRunning     - critical, and the detector for the exact 9-day
+          #                                 July 2026 outage this stack exists to prevent
+          # Those four keep the 2h default on purpose.
+          - matchers:
+              - cadence="daily"
+            receiver: 'nh22-slack'
+            repeat_interval: 24h
+
 receivers:
   - name: 'email'
     email_configs:

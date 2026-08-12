@@ -155,6 +155,9 @@ groups:
           severity: warning
           service: nh22-extractor
           kind: error
+          # Thresholds are 48-72h, so this reads a signal that moves on a multi-day cadence.
+          # See alertmanager/config.yml for what cadence=daily buys.
+          cadence: daily
         annotations:
           summary: "nh22 {{ $labels.source }} has not actually extracted"
           description: "'{{ $labels.source }}' has not completed a real extraction in longer than its expected cadence, even though its completeness gate may still look satisfied. The browser/session path is probably broken."
@@ -314,6 +317,9 @@ groups:
           severity: warning
           service: nh22-extractor
           kind: error
+          # The job this watches writes once a day at 05:10 MT, so the mtime it reads cannot
+          # advance more than once a day either. See alertmanager/config.yml.
+          cadence: daily
         annotations:
           summary: "nh22 cdbaby reauth reminder has stopped running"
           description: "nh22_cdbaby_reauth_reminder.prom has not been written in over 30 hours (the job runs daily at 05:10 MT and writes on every run). The proactive warning that the CD Baby credential is expiring is not being produced — the next sign of an expiring credential will be a crawl that fails on it."
@@ -362,7 +368,28 @@ groups:
           description: "The reminder decided the CD Baby credential needs attention and failed to post it to Slack. The warning that a ~30-day credential is expiring has been produced and thrown away — nobody has been told, and the next sign will be a crawl failing on dead auth."
           runbook: "`docker logs nh22-analytics-reauth-reminder-cdbaby-1` names the exact cause. not_in_channel: `/invite` the bot to the channel. invalid_auth/token_revoked or an unset token: fix SLACK_BOT_TOKEN in nighthawk22-analytics/.env. Then check the credential by hand — `nh22_cdbaby_reauth_reminder_seconds_left` says how long is left — and re-auth via `make reauth SOURCE=cdbaby` if it is short."
 
-      # Unexpected/unclassified failure across 2+ consecutive hourly runs.
+      # The most recent run for a source classified UNKNOWN and has stayed that way for 65m.
+      #
+      # This used to describe itself as "2+ consecutive hourly runs". That is true of the direct
+      # sources — extract-direct-catchup runs every 10 minutes and extract-direct hourly, so 65m
+      # really does span several failures for spotify and yts. It is false of everything else:
+      # ascap runs once a day (0 30 5 * * *) and cdbaby once with one retry (06:20 / 09:20), so
+      # for them the `for` clause cannot span two runs at all. The alert fired on a SINGLE failed
+      # run while telling the reader it had seen two.
+      #
+      # Fixed by correcting the claim rather than by gating on a run count, because there is no
+      # honest count to gate on: nh22_source_last_run_status has no companion cadence metric, and
+      # the one countable signal that exists (nh22_source_run_attempts_today) sits at 1 all day
+      # for ascap and cdbaby — requiring 2+ attempts would silence the daily sources permanently
+      # instead of making them accurate. A single failed daily run is worth saying once.
+      #
+      # Saying it twelve times was the actual defect, and that is fixed in the routing tree:
+      # this rule carries cadence=daily, which alertmanager/config.yml repeats every 24h.
+      #
+      # Observed 2026-08-11: one ascap run failed with "token refresh unreachable (Failed to
+      # fetch)", a transient network error 3 seconds in. Because this is a LAST-RUN gauge and
+      # nothing else was scheduled, UNKNOWN stayed pinned for a full 23.9h until the next day's
+      # run overwrote it — which then succeeded untouched (57 statements, complete=true).
       - alert: NH22ExtractorRunError
         expr: nh22_source_last_run_status{status="UNKNOWN"} == 1
         for: 65m
@@ -370,9 +397,10 @@ groups:
           severity: warning
           service: nh22-extractor
           kind: error
+          cadence: daily
         annotations:
           summary: "nh22 {{ $labels.source }} run error (UNKNOWN)"
-          description: "'{{ $labels.source }}' classified UNKNOWN for 2+ consecutive runs — check extractor container logs."
+          description: "The last '{{ $labels.source }}' run classified UNKNOWN and has stayed that way for over an hour — check extractor container logs. This reflects the LAST run only and cannot clear until the next scheduled run succeeds, which for ascap and cdbaby is once a day."
 
       # Metrics stopped being written at all (textfile absent) — belt for the whole job.
       - alert: NH22ExtractorMetricsMissing
