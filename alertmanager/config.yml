@@ -8,7 +8,26 @@ route:
     group_interval: 2m
     group_wait: 30s
     receiver: 'email'
-    repeat_interval: 2h
+    # ONCE PER DAY, EVERYWHERE. This is the cap, not a suggestion: no route below
+    # sets a shorter repeat_interval, so nothing in this pipeline can re-notify
+    # about a still-firing alert more than once in 24h.
+    #
+    # Set 2026-08-18, after a stopped scheduler produced 37 notifications in 15
+    # hours. The inhibit_rules at the bottom of this file cut that fan-out at the
+    # source; this cuts the nagging. They fix different halves of the same
+    # complaint and neither is sufficient alone — inhibition stops SIX alerts
+    # becoming six alert streams, and this stops any ONE of them becoming twelve
+    # posts a day.
+    #
+    # KNOWN COST, accepted deliberately. The July 2026 outage ran nine days
+    # precisely because alerts went quiet, and the note on the cadence=daily route
+    # below still stands: "too noisy is recoverable, too quiet is how the July 2026
+    # outage ran for 9 days." A 24h repeat means a missed notification costs a day.
+    # What makes that survivable is that repeat_interval only governs RE-notifying
+    # about an alert already delivered — a NEW alert still pages immediately on
+    # group_wait (30s), and a RESOLVED one is sent at once regardless. The first
+    # notification of anything is unaffected by every number in this file.
+    repeat_interval: 24h
     routes:
       # The alerting pipeline itself. MUST go to email: these fire precisely when
       # Slack delivery is broken, so routing them to Slack would be a closed loop
@@ -19,7 +38,7 @@ route:
           - service="alerting"
         receiver: 'email'
         group_by: ['alertname', 'integration']
-        repeat_interval: 6h
+        # Was 6h; inherits the 24h cap now.
 
       # Scheduled-job liveness (oneshot-exporter): the arr/vpn stack goes to EMAIL, never
       # Slack — asked for explicitly.
@@ -36,7 +55,7 @@ route:
           - service="vpn-jobs"
         receiver: 'email'
         group_by: ['alertname', 'container']
-        repeat_interval: 6h
+        # Was 6h; inherits the 24h cap now.
 
       # NightHawk22 extractor: auth breakage -> email AND Slack; everything else
       # (data staleness, run errors) -> Slack.
@@ -56,7 +75,10 @@ route:
           - matchers:
               - kind="auth"
             receiver: 'nh22-auth'
-            repeat_interval: 1h
+            # Was 1h — by far the loudest rule here, and the one this change quiets
+            # most. Auth still needs a human at a keyboard, so the mitigation is that
+            # it is the only alert delivered on BOTH channels: two independent chances
+            # at the one daily notification rather than twelve chances on one channel.
 
           # Data staleness repeats DAILY, not on the 2h global default.
           #
@@ -87,90 +109,192 @@ route:
             receiver: 'nh22-slack'
             repeat_interval: 24h
 
+          # Anything whose INPUT can only move once a day repeats once a day.
+          #
+          # Generalises the kind="data" rule above. A rule opts in by carrying cadence=daily,
+          # which is an assertion about the signal it reads: the job that writes it runs daily
+          # or slower, so between those runs the alert physically cannot say anything new.
+          # Repeating faster than the writer only reprints a value nobody has had the chance
+          # to change. As of 2026-08-12 three rules opt in — NH22ExtractorRunError,
+          # NH22ExtractorNotExtracting, NH22CdbabyReauthReminderStale.
+          #
+          # The label is OPT-IN, not opt-out, and that direction is the point: a new rule with
+          # no cadence label falls through to the 2h default. Too noisy is recoverable, too
+          # quiet is how the July 2026 outage ran for 9 days.
+          #
+          # Prompted by NH22ExtractorRunError[ascap] on 2026-08-11: one run failed on a
+          # transient "token refresh unreachable", the last-run gauge stayed UNKNOWN for the
+          # 23.9h until the next daily run, and the 2h default turned that into 12 identical
+          # posts — 11 of which reported a value with no way to have moved.
+          #
+          # DELIBERATELY NOT matched on kind="error" wholesale, though that was the obvious
+          # one-liner. Four of the seven kind=error rules read fast-moving signals and two of
+          # those are load-bearing backstops that must stay loud:
+          #   NH22CdbabyKeepaliveStalled  - while it fires, NH22CdbabySessionDead is DISARMED
+          #                                 (gated on a gauge that has stopped being written),
+          #                                 so CD Baby auth failures page nobody
+          #   NH22AscapKeepaliveStalled   - same shape; the credential is unmonitored
+          #   NH22ExtractorMetricsMissing - absent() over every source; any one of them writing
+          #                                 clears it, and a total blackout is the worst moment
+          #                                 to go quiet for a day
+          #   NH22ExtractorNotRunning     - critical, and the detector for the exact 9-day
+          #                                 July 2026 outage this stack exists to prevent
+          # Those four keep the 2h default on purpose.
+          - matchers:
+              - cadence="daily"
+            receiver: 'nh22-slack'
+            repeat_interval: 24h
+
 receivers:
   - name: 'email'
     email_configs:
-    - to: 'stevencarroll90@gmail.com'
+    - &email_config
+      to: 'stevencarroll90@gmail.com'
       from: 'alertmanager@stevenc4.com'
       smarthost: 'smtpd:25'
 
-  # NightHawk22 data/error alerts -> #alerts, posted by Cacau via an
-  # incoming webhook installed on that app. The channel is generic; the MESSAGE
-  # carries the app identity, so a reader in #alerts can tell which app fired at
-  # a glance. No `channel:` override — an incoming webhook is bound at install
-  # time to the one channel it was installed to.
+  # NightHawk22 data/error alerts -> #alerts, posted by Cacau.
   #
-  # Alertmanager's Slack integration speaks ONLY to incoming webhooks; it cannot
-  # use a bot token. That is why this is a webhook and not chat.postMessage, and
-  # why the app needs the `incoming-webhook` scope. Interposing a bot-token
-  # bridge service here was considered and rejected: a container in the alerting
-  # path is one more thing that can be pruned or crash and take the alerts down
-  # with it — the exact failure this pipeline just suffered.
+  # THIS RECEIVER CHANGED ON 2026-08-18, REVERSING A DECISION RECORDED RIGHT HERE.
+  # It used to hold `slack_configs` pointed at an incoming webhook, and the note said a
+  # bot-token bridge "was considered and rejected: a container in the alerting path is
+  # one more thing that can be pruned or crash and take the alerts down with it — the
+  # exact failure this pipeline just suffered." That reasoning was sound. It is
+  # overridden anyway, because Slack leaves no alternative:
+  #
+  #   A message posted by an INCOMING WEBHOOK can never be edited by a bot token.
+  #   Slack answers `cant_update_message` — verified against a real post on
+  #   2026-07-23 and pinned in alert-ack/tests/test_slack.py.
+  #
+  # So for as long as Alertmanager posts these itself, no alert can be marked resolved
+  # after the fact: the posts are not editable by anything, ever. Auto-resolve needs the
+  # post to be OURS, which needs chat.postMessage, which needs a bot token — which
+  # Alertmanager's Slack notifier cannot use at all. Hence a webhook_config, and
+  # alert-ack on the other end of it holding the bot token.
+  #
+  # WHAT MAKES THE REVERSAL SURVIVABLE is not a claim that alert-ack is reliable. It is
+  # that Slack is no longer the only path out of this receiver: `email_configs` sits
+  # alongside the webhook, unconditionally, so a dead alert-ack costs the Slack
+  # rendering and nothing else. The July 2026 outage was nine days of alerts reaching
+  # NOBODY; the worst case here is alerts reaching you by email only.
+  #
+  # Alertmanager also counts webhook notify failures itself, and
+  # alertmanager_notifications_failed_total{integration="webhook"} feeds the
+  # service="alerting" route at the top of this file — so the bridge is watched by the
+  # same rule that watches every other notifier.
   - name: 'nh22-slack'
-    slack_configs:
-    # Webhook URL is read from a git-ignored file so the secret never enters git.
-    # Create alertmanager/slack_webhook_url on the host with the hooks.slack.com URL.
-    # It MUST be readable by uid 65534 (the container's `nobody`) — a 0600
-    # steven-owned file silently broke every notify for 9 days in July 2026.
-    - &nh22_slack_config
-      api_url_file: '/etc/alertmanager/slack_webhook_url'
+    # First, and unconditionally. If the webhook below never lands, this already has.
+    email_configs:
+    - *email_config
+    webhook_configs:
+    - &nh22_webhook_config
+      # Container name on monitor-net. alert-ack joined that network in the same change:
+      # it was on homelab-slack ONLY, which is why Alertmanager could not reach it and
+      # why this could not have been wired up before.
+      url: 'http://alert-ack:8084/alertmanager'
+      # The whole point of the feature. Alertmanager sends `resolved` ONCE, as soon as
+      # the group clears, and resolved notifications are NOT subject to repeat_interval —
+      # so the 24h cap at the top of this file does not delay the green-ing at all.
       send_resolved: true
-      title: '{{ if eq .Status "firing" }}:rotating_light:{{ else }}:white_check_mark:{{ end }} NightHawk22 · {{ .CommonLabels.service }} — {{ .CommonLabels.alertname }}'
-      # `<@UID>` is the escape form, which fires a real notification without
-      # needing link_names. Mention on FIRING CRITICAL only — pinging on warnings
-      # and on every resolve is how a mention gets tuned out.
-      text: >-
-        {{ if and (eq .Status "firing") (eq .CommonLabels.severity "critical") }}<@U0BGX8MV8EA> {{ end }}
-        {{ range .Alerts }}*{{ .Labels.severity | toUpper }}* [{{ .Labels.source }}] {{ .Annotations.summary }}
-        {{ .Annotations.description }}
-        {{ if .Annotations.runbook }}*Runbook:* {{ .Annotations.runbook }}
-        {{ end }}{{ end }}
-      # A Resolve button on the post. Clicking it turns THIS post green and stamps who
-      # cleared it — see dockprom/alert-ack. It is a Slack-side acknowledgement only and
-      # changes nothing in Alertmanager: if the alert is still firing it will notify again
-      # on repeat_interval as a new (red) post. That is the point — a green post means "a
-      # human saw this one", never "the problem is gone".
-      #
-      # `callback_id` is the routing key: homelab-slack-gateway unicasts interactivity by
-      # the namespace before the first ':' (see its config/routes.yaml), so `alert:` is
-      # what steers the click to alert-ack. `actions[].name` is the verb within it.
-      #
-      # These are LEGACY attachment actions, not Block Kit. Alertmanager's Slack notifier
-      # has no `blocks` field, and an attachment is in any case the only thing in Slack that
-      # draws a coloured border — which is the whole ask. Note it renders on resolved posts
-      # too: the list cannot be made conditional, and a template that rendered an empty
-      # button text would make Slack reject the notify outright, which is a far worse
-      # failure than a redundant button. Hence the conditional LABEL instead.
-      callback_id: 'alert:{{ .CommonLabels.service }}'
-      actions:
-        - type: button
-          name: 'alert:resolve'
-          text: '{{ if eq .Status "firing" }}Mark resolved{{ else }}Acknowledge{{ end }}'
-          # Log context only — alert-ack reads nothing from it. Keep it to fields that ALWAYS
-          # exist: the Slack notifier renders `template.Data` (Status / CommonLabels / Alerts),
-          # which has no .GroupKey, and a template that fails to evaluate cancels the whole
-          # notify — the alert is then never delivered at all. Tried .GroupKey on 2026-07-23;
-          # it took the notification down with "can't evaluate field GroupKey".
-          value: '{{ .Status }}:{{ .CommonLabels.alertname }}'
-          style: primary
+      # 0 = never truncate. A truncated group would contain alerts alert-ack never learns
+      # about, and therefore posts it could never go back and resolve.
+      max_alerts: 0
+      http_config:
+        authorization:
+          type: Bearer
+          # Same git-ignored-file treatment as slack_webhook_url beside it, and the SAME
+          # WARNING: it must be readable by uid 65534 (the container's `nobody`). A 0600
+          # steven-owned file is precisely what silently broke every notify for 9 days in
+          # July 2026 — create it with `chown 65534:65534` and `chmod 0400`.
+          credentials_file: '/etc/alertmanager/alert_ack_token'
 
   # Auth breakage: BOTH channels, on purpose.
   #
-  # Re-auth needs a human at a keyboard, which is why this ever went to email —
-  # that has not changed and the email stays. What changed is that email-only
-  # left auth as the one nh22 alert absent from Slack, and the extractor filled
-  # that gap by posting to Slack itself, out of band: no ack button, no grouping,
-  # no silence, no repeat_interval, and nothing watching whether the post landed.
-  # Routing auth here instead means it arrives as Cacau with the same Resolve
-  # button as everything else, and the extractor's second delivery route can go.
+  # Re-auth needs a human at a keyboard, which is why this ever went to email — that has
+  # not changed and the email stays. What changed is that email-only left auth as the one
+  # nh22 alert absent from Slack, and the extractor filled that gap by posting to Slack
+  # itself, out of band: no ack button, no grouping, no silence, no repeat_interval, and
+  # nothing watching whether the post landed. Routing auth here instead means it arrives
+  # as Cacau with the same Resolve button as every other alert.
   #
-  # The slack_configs block is an alias of nh22-slack's, not a copy: two
-  # divergent renderings of the same alert is how a template fix lands on one
-  # channel and not the other.
+  # Both blocks are ALIASES of nh22-slack's, not copies: two divergent renderings of the
+  # same alert is how a template fix lands on one channel and not the other.
   - name: 'nh22-auth'
     email_configs:
-    - to: 'stevencarroll90@gmail.com'
-      from: 'alertmanager@stevenc4.com'
-      smarthost: 'smtpd:25'
-    slack_configs:
-    - *nh22_slack_config
+    - *email_config
+    webhook_configs:
+    - *nh22_webhook_config
+
+# ===========================================================================
+# Inhibition: one stopped scheduler should page once, not six times.
+# ===========================================================================
+#
+# On 2026-08-17 the Docker daemon restarted at 16:47 MDT. Every service with a
+# restart policy came back; `nh22-analytics-ofelia-1` had none and stayed down.
+# It is the cron daemon for the entire nh22 stack, so for the next 15 hours
+# nothing ran, and the one stopped container fanned out into six independent
+# notification groups:
+#
+#   SchedulerDaemonDown          <- the actual fault
+#   OneShotJobStale x2           <- importer + processor never triggered
+#   NH22{Ascap,Cdbaby}KeepaliveStalled x2  <- keepalives are ofelia-scheduled
+#   TextfileCollectorStale x2    <- those same keepalives write the .prom files
+#
+# Each nags on its own repeat_interval, so that arrived as 37 notifications
+# (22 email + 15 Slack) describing one thing. The rules below collapse that to
+# the first line: while the scheduler is down, the alerts it *causes* are
+# suppressed, and the critical page about the scheduler itself is not.
+#
+# What this deliberately does NOT inhibit: NH22DataStaleCritical. During this
+# same outage cdbaby was 7 days stale from dead auth, which had nothing to do
+# with the scheduler — suppressing it on a scheduler fault would have hidden the
+# one alert that actually needed a human. Data staleness keeps its own voice.
+#
+# Accepted cost: while ofelia is down the keepalive alerts are silenced, and
+# those are the rules that disarm NH22Cdbaby/AscapSessionDead (see the route
+# comments above). That disarming is real whether or not the alert is delivered
+# — a stopped scheduler means nothing is checking those sessions, full stop —
+# and SchedulerDaemonDown is critical, mentions @-you, and names the container.
+# Fixing it re-arms everything. The alternative is what happened here: the
+# backstop shouting six times about a cause it already named once.
+inhibit_rules:
+  # A stack's scheduler being down explains that stack's stale jobs.
+  #
+  # `equal: [hostname, service]` scopes this per stack, not globally: `service`
+  # is the stack identifier (nh22-jobs, vpn-jobs, garmin-jobs, ...), so the
+  # nh22 scheduler dying silences nh22 job staleness and nothing else. A
+  # vpn-jobs outage still pages normally about vpn-jobs.
+  - source_matchers:
+      - alertname="SchedulerDaemonDown"
+    target_matchers:
+      - alertname="OneShotJobStale"
+    equal: ['hostname', 'service']
+
+  # The nh22 scheduler also explains stale nh22 extractor signals.
+  #
+  # This one crosses services — the source is service="nh22-jobs" and the
+  # targets are service="nh22-extractor" or (for TextfileCollectorStale) carry
+  # no service label at all — so it cannot be scoped by `equal` the way the rule
+  # above is. It is scoped by pinning the SOURCE to the specific container
+  # instead. That is the honest statement of the coupling: it is not "some
+  # scheduler somewhere", it is that THIS daemon runs keepalive-ascap,
+  # keepalive-cdbaby and the extractors, which are what write these files.
+  #
+  # The file regex matters. /textfile_collector/ also holds oneshot_jobs.prom
+  # (written by the oneshot-exporter container) and zfs-metrics.prom (written by
+  # a systemd timer) — neither is ofelia's, and both must keep alerting while
+  # ofelia is down. Only the nh22_* files are in scope.
+  - source_matchers:
+      - alertname="SchedulerDaemonDown"
+      - container="nh22-analytics-ofelia-1"
+    target_matchers:
+      - alertname=~"NH22(Ascap|Cdbaby)KeepaliveStalled"
+    equal: ['hostname']
+
+  - source_matchers:
+      - alertname="SchedulerDaemonDown"
+      - container="nh22-analytics-ofelia-1"
+    target_matchers:
+      - alertname="TextfileCollectorStale"
+      - file=~"/textfile_collector/nh22_.*\\.prom"
+    equal: ['hostname']
