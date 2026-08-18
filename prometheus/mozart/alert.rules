@@ -180,7 +180,10 @@ groups:
       #     deliberately loose so a semi_automated source cannot hold the processor red
       #     for weeks — so is_stale never went true.
       # Fifteen days behind, and the 2026-08-10 weekly payment was lost for good: the
-      # routine window is a trailing 7 days keyed on PAYMENT DATE, so it aged out.
+      # routine window was then a trailing 7 days keyed on PAYMENT DATE, so it aged out.
+      # That default is now 30 days, so a gap shorter than a month self-heals on the
+      # next successful run — but recovery is not detection, and this rule is the part
+      # that notices. Keep it even though the window is wider.
       #
       # grain="day" IS LOAD-BEARING, NOT DECORATION. A month-grain dataset stamps every
       # row at the 1st, so its days_behind cycles 0-31 in perfect health — five CD Baby
@@ -191,8 +194,9 @@ groups:
       # weekly (every Monday, unbroken since April 2026). If CD Baby posts them promptly,
       # days_behind cycles 0-6 in health and 8 catches a single missed week immediately.
       # If CD Baby posts with a lag — the two most recent successful scrapes each found a
-      # payment dated 6 days earlier, though that is confounded by the 7-day window's own
-      # `from` edge, so it is weak evidence — the healthy ceiling is nearer 13 and this
+      # payment dated 6 days earlier, though that was confounded by the then-7-day
+      # window's own `from` edge, so it is weak evidence — the healthy ceiling is
+      # nearer 13 and this
       # will false-fire most of every week. That ambiguity was UNRESOLVABLE before this
       # metric existed. Watch nh22_ingest_dataset_days_behind{dataset="cdbaby_payments"}
       # for two weeks: if its healthy sawtooth peaks above 8, raise this to peak+3. Do
@@ -212,7 +216,7 @@ groups:
         annotations:
           summary: "nh22 CD Baby payment data is {{ $value }} days behind"
           description: "The newest row in payments.raw_cdbaby_payments is {{ $value }} days old. Payments are dated weekly (Mondays), so more than ~8 days means at least one weekly payment was never captured. The crawl may still be completing and reporting success — payment history returning ZERO rows counts as a clean run, which is exactly how this went unnoticed for 15 days in August 2026."
-          runbook: "Check the payment-history step in `docker logs nh22-analytics-extractor-cdbaby-1` — a 'payment history failed' line, or 'payment history scraped 0 row(s)' on a day a payment was due. NOTE the routine window is a trailing 7 days keyed on payment date, so a payment missed for longer than that CANNOT be recovered by a normal run: re-run with a wider window, e.g. `docker compose run --rm -e NH22_SOURCES=cdbaby -e NH22_FORCE=true -e NH22_CDBABY_PAYMENTS_TRAILING_DAYS=30 extractor`. Verify with `select max(dt) from payments.raw_cdbaby_payments;`."
+          runbook: "Check the payment-history step in `docker logs nh22-analytics-extractor-cdbaby-1` — a 'payment history failed' line, or 'payment history scraped 0 row(s)' on a day a payment was due. The routine window is a trailing 30 days keyed on payment date, so any gap shorter than a month is recovered automatically by the next SUCCESSFUL run — if this is firing, the scrape itself is failing, or the gap is older than 30 days. For an older gap, widen it for one run: `docker compose run --rm -e NH22_SOURCES=cdbaby -e NH22_FORCE=true -e NH22_CDBABY_PAYMENTS_TRAILING_DAYS=90 extractor`. Verify with `select max(dt) from payments.raw_cdbaby_payments;`."
 
       # The EXPORTER behind the rule above has stopped writing.
       #
