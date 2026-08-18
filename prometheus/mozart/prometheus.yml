@@ -16,6 +16,10 @@ alerting:
 scrape_configs:
   - job_name: 'cadvisor'
     scrape_interval: 15s
+    # Full 15s budget rather than the 10s default: rendering ~2k samples for 85
+    # containers is the slowest scrape here. Interval stays 15s so the [1m] rate
+    # panels in the dashboards keep four samples per window.
+    scrape_timeout: 15s
     static_configs:
       - targets: ['cadvisor:8080']
         labels:

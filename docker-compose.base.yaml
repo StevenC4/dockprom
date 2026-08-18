@@ -30,9 +30,14 @@ services:
       - /cgroup:/cgroup:ro # doesn't work on MacOS only for Linux
     command: 
     - "--docker_only=true"
-    - "--housekeeping_interval=15s"
-    - "--store_container_labels=true"
-    - "--whitelisted_container_labels=monitor_group"
+    - "--housekeeping_interval=30s"
+    # Only keep the labels the dashboards and alert rules actually match on;
+    # storing every container label is a large chunk of cAdvisor's memory.
+    - "--store_container_labels=false"
+    - "--whitelisted_container_labels=monitor_group,org.label-schema.group"
+    # Collectors nothing here queries. Left enabled: cpu, memory, network,
+    # oom_event, and disk (container_fs_usage_bytes feeds docker_containers.json).
+    - "--disable_metrics=diskIO,tcp,udp,advtcp,sched,process,hugetlb,referenced_memory,resctrl,cpu_topology,percpu,memory_numa"
     deploy:
       resources:
         limits:

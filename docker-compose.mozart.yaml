@@ -56,8 +56,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.5"
-          memory: "256m"
+          # 85 containers on this host: the old 0.5 CPU / 256m caps left cAdvisor
+          # throttled in 87% of CFS periods and pinned at its memory ceiling, so
+          # /metrics could not render inside Prometheus' scrape timeout.
+          cpus: "2"
+          memory: "1g"
 
   grafana:
     image: grafana/grafana:10.0.3
