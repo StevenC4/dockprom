@@ -143,3 +143,74 @@ tests:
             exp_annotations:
               summary: "Textfile collector /textfile_collector/watchtower.prom has stopped updating"
               description: "/textfile_collector/watchtower.prom has not been written in over an hour. Its metrics are frozen at their last values rather than absent, so they will look healthy."
+
+  # ---------------------------------------------------------------------------
+  # NH22PaymentDataStale
+  #
+  # The grain selector is exactly the kind of conjunct this file exists to protect: it
+  # looks like a redundant label filter, and without it the rule fires forever on five
+  # perfectly healthy month-grain datasets that legitimately sit at 17 days behind.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    name: payments fresh within the weekly cadence - must stay silent
+    input_series:
+      - series: 'nh22_ingest_dataset_days_behind{dataset="cdbaby_payments",grain="day",cadence="semi_automated"}'
+        values: '6x200'
+    alert_rule_test:
+      - eval_time: 3h
+        alertname: NH22PaymentDataStale
+        exp_alerts: []
+
+  - interval: 1m
+    name: a month-grain dataset 17 days behind is HEALTHY - must stay silent
+    input_series:
+      # This is the real observed state of five datasets on 2026-08-18. A rule without
+      # the grain="day" selector pages on every one of them, forever.
+      - series: 'nh22_ingest_dataset_days_behind{dataset="cdbaby_partner_sales",grain="month",cadence="semi_automated"}'
+        values: '17x200'
+      - series: 'nh22_ingest_dataset_days_behind{dataset="discover_campaign",grain="month",cadence="automated"}'
+        values: '17x200'
+    alert_rule_test:
+      - eval_time: 3h
+        alertname: NH22PaymentDataStale
+        exp_alerts: []
+
+  - interval: 1m
+    name: a missed weekly payment - must fire
+    input_series:
+      # 15 days behind: the real 2026-08-18 state, with the 2026-08-10 payment lost.
+      - series: 'nh22_ingest_dataset_days_behind{dataset="cdbaby_payments",grain="day",cadence="semi_automated"}'
+        values: '15x200'
+    alert_rule_test:
+      - eval_time: 3h
+        alertname: NH22PaymentDataStale
+        exp_alerts:
+          - exp_labels:
+              alertname: NH22PaymentDataStale
+              dataset: cdbaby_payments
+              grain: day
+              cadence: daily
+              severity: warning
+              service: nh22-extractor
+              kind: data
+            exp_annotations:
+              summary: "nh22 CD Baby payment data is 15 days behind"
+              description: "The newest row in payments.raw_cdbaby_payments is 15 days old. Payments are dated weekly (Mondays), so more than ~8 days means at least one weekly payment was never captured. The crawl may still be completing and reporting success — payment history returning ZERO rows counts as a clean run, which is exactly how this went unnoticed for 15 days in August 2026."
+              runbook: "Check the payment-history step in `docker logs nh22-analytics-extractor-cdbaby-1` — a 'payment history failed' line, or 'payment history scraped 0 row(s)' on a day a payment was due. NOTE the routine window is a trailing 7 days keyed on payment date, so a payment missed for longer than that CANNOT be recovered by a normal run: re-run with a wider window, e.g. `docker compose run --rm -e NH22_SOURCES=cdbaby -e NH22_FORCE=true -e NH22_CDBABY_PAYMENTS_TRAILING_DAYS=30 extractor`. Verify with `select max(dt) from payments.raw_cdbaby_payments;`."
+
+  # ---------------------------------------------------------------------------
+  # NH22IngestFreshnessExportStale
+  #
+  # The disarm-detector for the rule above. `> 8` cannot match an absent series, so a
+  # dead exporter makes missing payment data look exactly like healthy payment data.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    name: exporter writing on schedule - must stay silent
+    input_series:
+      - series: 'nh22_ingest_freshness_export_timestamp'
+        # promtool's clock starts at 0, so a timestamp tracking "now" keeps the age small.
+        values: '0+60x200'
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: NH22IngestFreshnessExportStale
+        exp_alerts: []

@@ -8,6 +8,9 @@ networks:
 
 volumes:
   grafana_data: {}
+  # The ts of every alert post alert-ack makes. Durable because a lost ts means a post that can
+  # never be marked resolved — see alert-ack/alert_ack/store.py.
+  alert_ack_data: {}
 
 services:
   alertmanager:
@@ -137,10 +140,17 @@ services:
     # SLACK_BOT_TOKEN (xoxb-, shared with the other backends) and HOMELAB_GATEWAY_SECRET (the
     # same value the gateway signs with, or it will 401 us). env/ is gitignored; see the README.
     env_file: ./env/alert-ack.env
+    volumes:
+      - alert_ack_data:/data
     networks:
       homelab-slack:
         aliases:
           - alert-ack-backend   # the name the gateway's routes.yaml dials
+      # Alertmanager lives on monitor-net and posts alerts here now, so alert-ack has to be
+      # reachable from it. Before auto-resolve this container was on homelab-slack ONLY, which is
+      # why the two could not talk: alerts went straight from Alertmanager to Slack's incoming
+      # webhook and this service never saw them.
+      monitor-net:
     labels:
       - com.centurylinklabs.watchtower.enable=false
 
