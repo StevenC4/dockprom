@@ -214,3 +214,62 @@ tests:
       - eval_time: 2h
         alertname: NH22IngestFreshnessExportStale
         exp_alerts: []
+
+  # ---------------------------------------------------------------------------
+  # NH22CdbabyKeepaliveStalled
+  #
+  # The threshold here is COUPLED to keepalive-cdbaby's ofelia schedule, and nothing
+  # enforces that coupling but this test. On 2026-08-18 the cadence was slowed
+  # 10m -> 30m (it had been sized against a "~20-minute cdb.auth" reading that was
+  # later retracted; the real credential is ~30 days), and the threshold had to move
+  # 2400s -> 5400s with it. Left at 2400s it would have fired on a perfectly healthy
+  # keepalive after a single missed tick — and while it fires, NH22CdbabySessionDead
+  # is DISARMED, so the noise would also have hidden a real dead session.
+  #
+  # Both directions asserted: silent at the new cadence, still catching a genuine stall.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    name: cdbaby keepalive ticking every 30m, with one missed tick - must stay silent
+    input_series:
+      # The timestamp holds between ticks and jumps to "now" on each one; promtool's
+      # clock starts at 0, so tracking it keeps the age realistic.
+      #
+      # A MISSED TICK IS THE WHOLE POINT of this case. A series that ticks perfectly
+      # every 30m peaks at only ~1800s of age, which is under BOTH the old 2400s
+      # threshold and the new 5400s one — so it passes either way and proves nothing.
+      # (Checked: the first version of this test did exactly that.) One skipped tick
+      # takes the peak age to ~3600s, which is above 2400 and below 5400, and that is
+      # what makes this test discriminate. It is also realistic: keepalive-cdbaby
+      # skips its tick outright whenever a crawl holds the scrape lock.
+      # EVAL TIME MATTERS AS MUCH AS THE SERIES. promtool evaluates only at the
+      # instant named, so evaluating after the keepalive recovers proves nothing —
+      # the alert has already cleared and the test passes at any threshold. 88m is
+      # inside the gap: the last tick was at 30m (t=1800s), so the age is ~3480s,
+      # which is above the OLD 2400s threshold (and has been for 18m, clearing the
+      # `for: 15m` debounce) and below the new 5400s one.
+      - series: 'nh22_cdbaby_session_last_check_timestamp'
+        #        t=0..29 -> 0     t=30..89 -> 1800 (the t=60 tick never happened)
+        values: '0x29 1800x59 5400x59'
+    alert_rule_test:
+      - eval_time: 88m
+        alertname: NH22CdbabyKeepaliveStalled
+        exp_alerts: []
+
+  - interval: 1m
+    name: cdbaby keepalive genuinely stopped - must still fire
+    input_series:
+      # One tick at t=0 and then nothing ever again.
+      - series: 'nh22_cdbaby_session_last_check_timestamp'
+        values: '0x300'
+    alert_rule_test:
+      - eval_time: 3h
+        alertname: NH22CdbabyKeepaliveStalled
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: nh22-extractor
+              kind: error
+            exp_annotations:
+              summary: "nh22 cdbaby keepalive has stopped checking"
+              description: "No CD Baby session check in over 90 minutes (it runs every 30 — slowed from every 10 on 2026-08-18, which is why this threshold moved from 2400s to 5400s; both are 3 missed ticks). NH22CdbabySessionDead is gated on nh22_cdbaby_session_valid and is therefore DISARMED while this fires — a dead CD Baby session will not page until this is fixed."
+              runbook: "`docker logs nh22-analytics-keepalive-cdbaby-1`. If the container is missing, ensure-containers recreates it at :05; if ofelia itself is down, SchedulerDaemonDown will be firing too. Until this clears, check CD Baby auth by hand: `docker compose run --rm extractor node src/run.mjs --sources cdbaby --dry-run` or just watch for the 06:20/09:20 crawl's own AUTH_REQUIRED log line."

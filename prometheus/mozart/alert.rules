@@ -89,7 +89,7 @@ groups:
         annotations:
           summary: "nh22 {{ $labels.source }} needs re-auth"
           description: "Source '{{ $labels.source }}' is reporting AUTH_REQUIRED and has been for over an hour. Scheduled extraction is blocked until you re-authenticate; the circuit-breaker is holding the browser back until then, so this will not clear on its own."
-          runbook: "Easiest path for any source: open https://nh22-reauth.stevenc4.com/ — the auto-reauth supervisor spawns a console there within 15 minutes of the failure (07:00-21:59 MT) and waits for you, so there is usually nothing to start by hand. Otherwise, from nighthawk22-analytics: `make reauth SOURCE=<source>`. Per source — spotify: usually self-heals (scripted TOTP), needs a human only if a captcha appeared. yts: sign in at the noVNC URL. ascap: sign in AND clear the SMS code at the noVNC URL; extraction is daily at 05:30 MT, so a fix any time that day is in time for the next run. See nighthawk22-analytics/extractor/RUNBOOK.md and docs/AUTH_AUTOREAUTH.md."
+          runbook: "Open THIS SOURCE'S OWN console: https://nh22-reauth.stevenc4.com/{{ $labels.source }} — since 2026-08-18 every source has its own console at its own path, and the auto-reauth supervisor spawns one for each source that needs it within 15 minutes of the failure (05:00-21:59 MT) and waits for you, so there is usually nothing to start by hand. Otherwise, from nighthawk22-analytics: `make reauth SOURCE={{ $labels.source }}`. Per source — spotify: usually self-heals (scripted TOTP), needs a human only if a captcha appeared. yts: sign in at that URL. See nighthawk22-analytics/extractor/RUNBOOK.md and docs/AUTH_AUTOREAUTH.md. (This alert excludes ascap and cdbaby; they have their own alerts below.)"
 
       # Data-missing signal: alert only once we're missing MORE THAN 2 DAYS' worth
       # of data. last_success_timestamp advances daily in normal operation (age
@@ -291,7 +291,7 @@ groups:
         annotations:
           summary: "nh22 ascap session is dead and extraction is blocked"
           description: "ASCAP needs a human: either the keepalive tried an unattended re-bind and it FAILED, or the session has gone unrepaired for 6+ straight checks, or the extractor is independently reporting AUTH_REQUIRED. This is not a routine party-binding lapse — those are re-bound automatically and never reach here."
-          runbook: "Open https://nh22-reauth.stevenc4.com/ — auto-reauth spawns the console within 15 minutes (07:00-21:59 MT) and waits. ASCAP needs a password AND an SMS code. If nothing is waiting, run `make reauth SOURCE=ascap` in nighthawk22-analytics."
+          runbook: "Open https://nh22-reauth.stevenc4.com/ascap — ASCAP's OWN console, on its own path since 2026-08-18; opening the bare hostname no longer reaches one. auto-reauth spawns it within 15 minutes (05:00-21:59 MT) and waits, and it no longer has to queue behind another source's console. ASCAP needs a password AND an SMS code. If nothing is waiting, run `make reauth SOURCE=ascap` in nighthawk22-analytics."
 
       # CD Baby session keepalive (nh22_cdbaby_session_*, written by the 24/7
       # keepalive-cdbaby job, NOT by the extractor's nh22_source_* set) — the CD Baby
@@ -309,15 +309,20 @@ groups:
       #
       # The `and on(instance)` gate is the fix: AND the persisted, possibly-stale
       # auth_required flag against nh22_cdbaby_session_valid, which the keepalive
-      # re-measures every 10 minutes independently of the crawl. A session the
+      # re-measures every 30 minutes independently of the crawl. A session the
       # keepalive can currently read as valid clears this alert immediately, without
       # waiting for tomorrow's run to rewrite the stale gauge. What survives the gate
       # is the case worth waking up for: auth_required is set AND the much-more-
       # frequently-sampled keepalive agrees the session is actually dead right now.
       #
-      # for: 90m matches NH22AscapSessionDead's debounce. keepalive-cdbaby's 10-minute
-      # cadence (vs. ascap's 20) settles nh22_cdbaby_session_valid well inside that,
-      # so 90m is headroom against flapping, not a wait for enough samples.
+      # for: 90m matches NH22AscapSessionDead's debounce. keepalive-cdbaby's cadence
+      # was slowed 10m -> 30m on 2026-08-18 (it was sized against a retracted
+      # ~20-minute cookie; the real credential is ~30 days, and each tick cost a
+      # fresh browser fingerprint at an origin that scores clients for bot-ness).
+      # 90m is still 3 samples, so nh22_cdbaby_session_valid settles inside the
+      # window and this stays headroom against flapping rather than a wait for
+      # enough samples — but the margin is now 3 ticks, not 9. Do not shorten
+      # `for:` below 90m without revisiting that.
       #
       # kind=auth, routing to nh22-auth (email + Cacau) like every other alert that
       # needs a person at a keyboard — which this does: the only fix is signing in,
@@ -332,7 +337,7 @@ groups:
         annotations:
           summary: "nh22 cdbaby session is dead and extraction is blocked"
           description: "The CD Baby session has been failing for 90m+ AND the extractor is reporting AUTH_REQUIRED, so this is a genuine block rather than the persisted-gauge staleness a once/twice-daily source leaves behind after being fixed."
-          runbook: "Open https://nh22-reauth.stevenc4.com/ — auto-reauth spawns the console within 15 minutes (07:00-21:59 MT) and waits. If nothing is waiting, run `make reauth SOURCE=cdbaby` in nighthawk22-analytics."
+          runbook: "Open https://nh22-reauth.stevenc4.com/cdbaby — CD Baby's OWN console, on its own path since 2026-08-18; opening the bare hostname no longer reaches one. auto-reauth spawns it within 15 minutes (05:00-21:59 MT) and waits. If nothing is waiting, run `make reauth SOURCE=cdbaby` in nighthawk22-analytics. NOTE the crawl log line naming a cause: it now distinguishes a genuinely EXPIRED cdb.auth from one that was still valid and got REFUSED (bot-scoring) — those need opposite fixes, and it used to assert the former unconditionally."
 
       # The keepalive itself stopped running. Distinct from the session being dead:
       # here we do not know the session's state at all. Since the 3h expiry is
@@ -373,7 +378,7 @@ groups:
       # does NOT advance the timestamp, so a legitimately busy morning can drop two
       # in a row without anything being wrong.
       - alert: NH22CdbabyKeepaliveStalled
-        expr: time() - nh22_cdbaby_session_last_check_timestamp > 2400
+        expr: time() - nh22_cdbaby_session_last_check_timestamp > 5400
         for: 15m
         labels:
           severity: warning
@@ -381,7 +386,7 @@ groups:
           kind: error
         annotations:
           summary: "nh22 cdbaby keepalive has stopped checking"
-          description: "No CD Baby session check in over 40 minutes (it runs every 10). NH22CdbabySessionDead is gated on nh22_cdbaby_session_valid and is therefore DISARMED while this fires — a dead CD Baby session will not page until this is fixed."
+          description: "No CD Baby session check in over 90 minutes (it runs every 30 — slowed from every 10 on 2026-08-18, which is why this threshold moved from 2400s to 5400s; both are 3 missed ticks). NH22CdbabySessionDead is gated on nh22_cdbaby_session_valid and is therefore DISARMED while this fires — a dead CD Baby session will not page until this is fixed."
           runbook: "`docker logs nh22-analytics-keepalive-cdbaby-1`. If the container is missing, ensure-containers recreates it at :05; if ofelia itself is down, SchedulerDaemonDown will be firing too. Until this clears, check CD Baby auth by hand: `docker compose run --rm extractor node src/run.mjs --sources cdbaby --dry-run` or just watch for the 06:20/09:20 crawl's own AUTH_REQUIRED log line."
 
       # The reauth reminder — the proactive "cdb.auth is running out" nudge, daily at
