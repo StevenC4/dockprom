@@ -273,3 +273,234 @@ tests:
               summary: "nh22 cdbaby keepalive has stopped checking"
               description: "No CD Baby session check in over 90 minutes (it runs every 30 — slowed from every 10 on 2026-08-18, which is why this threshold moved from 2400s to 5400s; both are 3 missed ticks). NH22CdbabySessionDead is gated on nh22_cdbaby_session_valid and is therefore DISARMED while this fires — a dead CD Baby session will not page until this is fixed."
               runbook: "`docker logs nh22-analytics-keepalive-cdbaby-1`. If the container is missing, ensure-containers recreates it at :05; if ofelia itself is down, SchedulerDaemonDown will be firing too. Until this clears, check CD Baby auth by hand: `docker compose run --rm extractor node src/run.mjs --sources cdbaby --dry-run` or just watch for the 06:20/09:20 crawl's own AUTH_REQUIRED log line."
+
+  # ---------------------------------------------------------------------------
+  # SparkyActivityPush* (garmin-jobs activity pusher) — all four, both directions
+  #
+  # Four rules cover one daemon and the whole point is that each catches a state the others
+  # cannot see. That is exactly the shape that looks redundant later and gets consolidated, so
+  # every case below names which rules must be SILENT as well as which must fire — a set of
+  # tests asserting only the firing rule would be passed perfectly by a rule that had swallowed
+  # its neighbour's job and lost the distinction.
+  #
+  # Series shape: `0+60x150` advances the mtime by 60 every minute, i.e. a file always ~0s old.
+  # Freezing the value is how a stopped writer is modelled. promtool's clock starts at epoch 0,
+  # so `time() - value` is a real age.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    name: pusher healthy, cycling every 5m - all four must stay silent
+    input_series:
+      - series: 'node_textfile_mtime_seconds{instance="mozart:9100",file="/textfile/sparky_activity_push.prom"}'
+        values: '0+60x150'
+      - series: 'sparky_activity_push_last_success_timestamp_seconds{instance="mozart:9100",service="garmin-jobs"}'
+        values: '0+60x150'
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: SparkyActivityPushFailing
+        exp_alerts: []
+      - eval_time: 2h
+        alertname: SparkyActivityPushGone
+        exp_alerts: []
+      - eval_time: 2h
+        alertname: SparkyActivityPushHeartbeatMissing
+        exp_alerts: []
+      - eval_time: 2h
+        alertname: SparkyActivityPushNeverSucceeded
+        exp_alerts: []
+
+  - interval: 1m
+    name: pusher up and failing - Failing fires, Gone must not
+    input_series:
+      # The file keeps being rewritten every cycle; the success value froze at t=0. This is the
+      # shape an expired Garmin login produces, and it is ONLY distinguishable from a dead
+      # daemon because the pusher keeps publishing while parked.
+      - series: 'node_textfile_mtime_seconds{instance="mozart:9100",file="/textfile/sparky_activity_push.prom"}'
+        values: '0+60x150'
+      - series: 'sparky_activity_push_last_success_timestamp_seconds{instance="mozart:9100",service="garmin-jobs"}'
+        values: '0x150'
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: SparkyActivityPushGone
+        exp_alerts: []
+      - eval_time: 2h
+        alertname: SparkyActivityPushNeverSucceeded
+        exp_alerts: []
+      - eval_time: 2h
+        alertname: SparkyActivityPushFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: garmin-jobs
+              instance: mozart:9100
+            exp_annotations:
+              summary: "SparkyFitness activity push has not succeeded in 30 minutes"
+              description: "The pusher is running and writing its heartbeat, but no cycle has completed successfully for over 30 minutes, so SparkyFitness's active-calorie rows are going stale. It is not broken data -- Sparky's own Garmin sync still reclaims each day hourly -- but the five-minute freshness this job exists for is gone. Check `make pusher-logs` for a Garmin rate-limit or an expired login."
+              runbook: "`make pusher-logs` in ~/src/garmin-jobs. An expired Garmin login logs `parking the login` and needs `make bootstrap` (interactive, handles MFA) -- the daemon heals itself within the hour once that has run. A 429 logs `rate-limited` and needs nothing. Sparky refusing the write logs the HTTP status; check `docker compose ps` in ~/src/SparkyFitness. `sparky_activity_push_garmin_last_sync_timestamp_seconds` going stale too means the WATCH has not synced, which no amount of restarting here will fix."
+
+  - interval: 1m
+    name: pusher dead - Gone fires, Failing must not, and the catch-all must stay out of it
+    input_series:
+      # Everything frozen at t=0: the container stopped and LEFT ITS FILE BEHIND, which is why
+      # absent() cannot be the rule for this case. TextfileCollectorStale is asserted silent
+      # here because its exclusion list and these rules are one unit — without the exclusion this
+      # single fault raises three alerts.
+      - series: 'node_textfile_mtime_seconds{instance="mozart:9100",file="/textfile/sparky_activity_push.prom"}'
+        values: '0x150'
+      - series: 'sparky_activity_push_last_success_timestamp_seconds{instance="mozart:9100",service="garmin-jobs"}'
+        values: '0x150'
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: SparkyActivityPushFailing
+        exp_alerts: []
+      - eval_time: 2h
+        alertname: TextfileCollectorStale
+        exp_alerts: []
+      - eval_time: 2h
+        alertname: SparkyActivityPushGone
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: garmin-jobs
+              instance: mozart:9100
+              file: /textfile/sparky_activity_push.prom
+            exp_annotations:
+              summary: "SparkyFitness activity pusher has stopped writing its heartbeat"
+              description: "Nothing has rewritten sparky_activity_push.prom in over 30 minutes, so the pusher is not running -- crashed, stopped, or never started. Note its metrics are FROZEN rather than absent, so every value in them still looks healthy. Check `docker compose ps pusher`."
+              runbook: "`docker compose ps -a pusher` then `make pusher-logs` in ~/src/garmin-jobs. A container in `created` state has never been started -- that is Ofelia's ensure-containers having manufactured it, and `make up` fixes it. Exited: read the logs, the daemon only exits on SIGTERM. Absent entirely: `make up`, and check `pusher` is in the Makefile's DAEMONS."
+
+  # THE HANDOVER. A daemon that fails for an hour and THEN dies is the one case where the two
+  # rules swap, and with equal 1800s thresholds there was a five-minute hole in the middle of the
+  # swap: Failing stopped matching the instant the mtime crossed 1800 while Gone still owed its
+  # `for: 5m`, so Alertmanager sent RESOLVED for a fault that had just got worse. Failing's guard
+  # is 2100 (one cycle wider) to overlap instead. Both instants below are asserted because the
+  # gap only exists between them.
+  - interval: 1m
+    name: pusher failed for an hour then died - coverage must not lapse across the handover
+    input_series:
+      # Fresh for 60 minutes, then frozen at 3600. mtime age crosses 1800 at t=90m and 2100 at
+      # t=95m; Gone's `for: 5m` completes at t=95m.
+      - series: 'node_textfile_mtime_seconds{instance="mozart:9100",file="/textfile/sparky_activity_push.prom"}'
+        values: '0+60x59 3600x200'
+      - series: 'sparky_activity_push_last_success_timestamp_seconds{instance="mozart:9100",service="garmin-jobs"}'
+        values: '0x260'
+    alert_rule_test:
+      # t=94m: inside the old hole. Failing must still be holding the fault.
+      - eval_time: 94m
+        alertname: SparkyActivityPushFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: garmin-jobs
+              instance: mozart:9100
+            exp_annotations:
+              summary: "SparkyFitness activity push has not succeeded in 30 minutes"
+              description: "The pusher is running and writing its heartbeat, but no cycle has completed successfully for over 30 minutes, so SparkyFitness's active-calorie rows are going stale. It is not broken data -- Sparky's own Garmin sync still reclaims each day hourly -- but the five-minute freshness this job exists for is gone. Check `make pusher-logs` for a Garmin rate-limit or an expired login."
+              runbook: "`make pusher-logs` in ~/src/garmin-jobs. An expired Garmin login logs `parking the login` and needs `make bootstrap` (interactive, handles MFA) -- the daemon heals itself within the hour once that has run. A 429 logs `rate-limited` and needs nothing. Sparky refusing the write logs the HTTP status; check `docker compose ps` in ~/src/SparkyFitness. `sparky_activity_push_garmin_last_sync_timestamp_seconds` going stale too means the WATCH has not synced, which no amount of restarting here will fix."
+      # t=97m: Gone has taken over and Failing has let go. One fault, one alert, no lapse.
+      - eval_time: 97m
+        alertname: SparkyActivityPushFailing
+        exp_alerts: []
+      - eval_time: 97m
+        alertname: SparkyActivityPushGone
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: garmin-jobs
+              instance: mozart:9100
+              file: /textfile/sparky_activity_push.prom
+            exp_annotations:
+              summary: "SparkyFitness activity pusher has stopped writing its heartbeat"
+              description: "Nothing has rewritten sparky_activity_push.prom in over 30 minutes, so the pusher is not running -- crashed, stopped, or never started. Note its metrics are FROZEN rather than absent, so every value in them still looks healthy. Check `docker compose ps pusher`."
+              runbook: "`docker compose ps -a pusher` then `make pusher-logs` in ~/src/garmin-jobs. A container in `created` state has never been started -- that is Ofelia's ensure-containers having manufactured it, and `make up` fixes it. Exited: read the logs, the daemon only exits on SIGTERM. Absent entirely: `make up`, and check `pusher` is in the Makefile's DAEMONS."
+
+  - interval: 1m
+    name: pusher writing but never once successful - NeverSucceeded fires, Failing cannot
+    input_series:
+      # NO success series at all. The heartbeat omits that line until the first success rather
+      # than publishing epoch 0, so Failing's first conjunct matches nothing and is silent
+      # FOREVER in this state — which is the entire reason this rule exists.
+      - series: 'node_textfile_mtime_seconds{instance="mozart:9100",file="/textfile/sparky_activity_push.prom"}'
+        values: '0+60x150'
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: SparkyActivityPushFailing
+        exp_alerts: []
+      - eval_time: 2h
+        alertname: SparkyActivityPushGone
+        exp_alerts: []
+      - eval_time: 2h
+        alertname: SparkyActivityPushHeartbeatMissing
+        exp_alerts: []
+      - eval_time: 2h
+        alertname: SparkyActivityPushNeverSucceeded
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: garmin-jobs
+            exp_annotations:
+              summary: "SparkyFitness activity pusher has never completed a successful cycle"
+              description: "The pusher is writing its heartbeat but has never once succeeded, so it has been failing since the moment it started. Expect a first deploy that cannot reach SparkyFitness or Garmin at all -- a missing SPARKY_API_KEY, the wrong network, or a token store that was never bootstrapped."
+              runbook: "`make pusher-logs` in ~/src/garmin-jobs; every cycle logs its reason. `make pusher-dry` prints what it would send and whether the key is configured, and runs on the pusher's own service so it inherits the same networks and mounts."
+
+  - interval: 1m
+    name: heartbeat series never appeared at all - Missing fires and the other three are blind
+    input_series:
+      # No mtime series whatsoever: the file was never written, the bind mount points somewhere
+      # node_exporter does not read, or the file is unparseable and node_exporter skipped it
+      # whole. The three rules that compare against that series can only be silent, which is why
+      # this one is not redundant with Gone.
+      - series: 'node_textfile_mtime_seconds{instance="mozart:9100",file="/textfile/zfs-metrics.prom"}'
+        values: '0+60x150'
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: SparkyActivityPushFailing
+        exp_alerts: []
+      - eval_time: 2h
+        alertname: SparkyActivityPushGone
+        exp_alerts: []
+      - eval_time: 2h
+        alertname: SparkyActivityPushNeverSucceeded
+        exp_alerts: []
+      - eval_time: 2h
+        alertname: SparkyActivityPushHeartbeatMissing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: garmin-jobs
+            exp_annotations:
+              summary: "SparkyFitness activity pusher heartbeat has never appeared"
+              description: "node_exporter is publishing no mtime for sparky_activity_push.prom, so the file has never been written, the bind mount does not point at the directory node_exporter reads, or the file is unparseable and node_exporter is skipping it whole. SparkyActivityPushFailing and SparkyActivityPushGone are both BLIND in this state -- they compare against a series that does not exist."
+              runbook: "Check the file is where both sides think it is: `ls -l ~/src/dockprom/textfile_collector/sparky_activity_push.prom` and that the pusher's `/textfile` mount resolves to that same directory (`docker inspect` the mount source, or TEXTFILE_COLLECTOR_DIR in garmin-jobs' environment file). If the file is present and recent, it is unparseable -- see TextfileCollectorUnparseable and `promtool check metrics < the file`."
+
+  # ---------------------------------------------------------------------------
+  # TextfileCollectorUnparseable
+  #
+  # node_exporter's own verdict. Both directions, because 0 is the value on every healthy scrape
+  # and a rule written `>= 0` or on `absent()` would page continuously.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    name: every textfile parsed cleanly - must stay silent
+    input_series:
+      - series: 'node_textfile_scrape_error{instance="mozart:9100"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: TextfileCollectorUnparseable
+        exp_alerts: []
+
+  - interval: 1m
+    name: a textfile will not parse - must fire
+    input_series:
+      - series: 'node_textfile_scrape_error{instance="mozart:9100"}'
+        values: '1x60'
+    alert_rule_test:
+      - eval_time: 45m
+        alertname: TextfileCollectorUnparseable
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              instance: mozart:9100
+            exp_annotations:
+              summary: "node_exporter cannot parse a file in its textfile directory"
+              description: "node_exporter reported a textfile parse error. It SKIPS the offending file whole, so that writer's metrics are absent rather than stale and every freshness rule for them is blind -- including the Sparky and ZFS rules in this group."
+              runbook: "`ls -lt ~/src/dockprom/textfile_collector/` — the newest file is the suspect. `promtool check metrics < <file>` names the bad line. Also look for leftover *.tmp files: a writer that died mid-publish leaves one, and a .prom-suffixed temp name would be read as a real file."

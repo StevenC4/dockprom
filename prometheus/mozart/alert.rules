@@ -648,7 +648,13 @@ groups:
           summary: "oneshot-exporter metrics are absent entirely"
           description: "No oneshot_jobs.prom at all — the exporter has never run, or the textfile mount is broken. Every scheduled-job alert above is blind."
 
-  # The schedulers themselves, from the same exporter (SCHEDULER_TARGETS).
+  # The long-running daemons themselves, from the same exporter (SCHEDULER_TARGETS).
+  #
+  # The name of that variable is historical: `oneshot-exporter/export.sh` consumes it as `DAEMONS=`
+  # and the metrics it drives -- present / running / last_exit_code / restart_count -- say nothing
+  # about scheduling. It holds every daemon worth watching, which since 2026-09-24 includes
+  # garmin-jobs' activity pusher, a worker that schedules nothing. The annotations below were
+  # reworded in the same change to stop asserting that every entry is a scheduler.
   #
   # The group above watches jobs by their effect, which is sound and did its job on 2026-07-31:
   # nh22-analytics-ofelia-1 exited 1 on an unparseable config, and OneShotJobStale reported the
@@ -670,8 +676,8 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: "Scheduler {{ $labels.container }} is not running"
-          description: "'{{ $labels.container }}' ({{ $labels.service }}) exists but is stopped, so every job it schedules has silently stopped firing. Expect OneShotJobStale to follow for each of them as their budgets expire."
+          summary: "Daemon {{ $labels.container }} is not running"
+          description: "'{{ $labels.container }}' ({{ $labels.service }}) exists but is stopped. If it schedules jobs, every one of them has silently stopped firing and OneShotJobStale will follow as their budgets expire; if it is a worker (garmin-sparky-pusher), whatever it was doing is simply not happening."
           runbook: "`docker logs {{ $labels.container }} | tail -20`. Ofelia exits 1 on a config it cannot parse and says so in ONE line — an unknown key in a [job-run] section (e.g. `entrypoint`) is fatal for EVERY job, not just that one. Validate before restarting: `docker run --rm -v ./ofelia.ini:/etc/ofelia/config.ini:ro mcuadros/ofelia:latest validate --config /etc/ofelia/config.ini`."
 
       # Distinct from Down: nothing to restart, the container is gone. Same prune failure mode as
@@ -682,8 +688,8 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: "Scheduler {{ $labels.container }} does not exist"
-          description: "'{{ $labels.container }}' ({{ $labels.service }}) is not present on the host at all. Every job in that stack is unscheduled."
+          summary: "Daemon {{ $labels.container }} does not exist"
+          description: "'{{ $labels.container }}' ({{ $labels.service }}) is not present on the host at all — never created, or removed. For a scheduler, every job in that stack is unscheduled. NOTE this is the only signal that catches a daemon that was never started: a file-freshness rule cannot, because the file it would watch never existed."
           runbook: "`make up` in the owning repo. Unlike the one-shot containers, no ensure-containers job can repair this — ensure-containers is itself run BY the scheduler that is missing."
 
       # Up, but dying repeatedly. Restarts are cheap to count and this is the shape of a bad
@@ -695,8 +701,8 @@ groups:
         labels:
           severity: critical
         annotations:
-          summary: "Scheduler {{ $labels.container }} is crash-looping"
-          description: "'{{ $labels.container }}' ({{ $labels.service }}) has restarted {{ $value }} times in the last hour. It is not staying up long enough to schedule reliably."
+          summary: "Daemon {{ $labels.container }} is crash-looping"
+          description: "'{{ $labels.container }}' ({{ $labels.service }}) has restarted {{ $value }} times in the last hour. It is not staying up long enough to do its job reliably — and a process that writes a heartbeat before dying each time looks HEALTHY to any file-freshness rule, so this is the only thing that catches that shape."
           runbook: "`docker logs {{ $labels.container }} | tail -20` — the same ofelia config-parse note as SchedulerDaemonDown applies."
 
   # Textfile collectors. node_exporter publishes the mtime of every file it reads, which is the
@@ -738,47 +744,127 @@ groups:
       # rule is not a fix, it is an unmonitored collector.
       # --- SparkyFitness activity pusher (garmin-jobs) -------------------------------------------
       #
-      # This daemon SCHEDULES NOTHING, which is why it is deliberately absent from SCHEDULER_TARGETS:
-      # that list's annotations say "every job it schedules has silently stopped", which would
-      # misdescribe every failure of this container. These two rules are the whole of its monitoring.
+      # This daemon SCHEDULES NOTHING. It is on SCHEDULER_TARGETS anyway (see the note there): that
+      # list is consumed as `DAEMONS=` and its container-level metrics catch two shapes no file rule
+      # can -- a container that was never created writes no file to go stale, and one that crash-loops
+      # after each write looks healthy to every freshness rule below. The four rules here are the
+      # file-level half, and they are not redundant with each other.
       #
-      # They are mutually exclusive on purpose. `absent()` was the original proposal and cannot work:
-      # a dead pusher LEAVES ITS .prom FILE ON DISK, so the series survives a crashed, stopped or even
-      # deleted container and `absent()` would only ever fire in the gap between a rules reload and the
-      # first deploy -- i.e. only as a false alarm. File AGE is the signal that actually distinguishes
-      # the cases, so one rule reads the heartbeat VALUE and the other reads the file's MTIME, each
-      # guarded so a single fault raises a single alert that says the right thing.
+      # FOUR, because the first draft had two and each of the gaps below was a real unmonitored state:
       #
-      # sparky_activity_push.prom is excluded from TextfileCollectorStale above, in this same change,
-      # for the reason that rule's own comment gives: the exclusion and these rules are one unit and
-      # neither is correct alone. Without it a dead pusher raises three alerts for one fault.
+      #   Failing   -- the file is FRESH and the success value is STALE: up, and failing.
+      #   Gone      -- the file exists and is STALE: crashed, stopped, or never started after a deploy.
+      #   Missing   -- the series does not exist AT ALL.
+      #   NeverSucceeded -- the file is fresh, but the success series has never appeared.
+      #
+      # `absent()` was rejected in the first draft on the grounds that a dead pusher LEAVES ITS .prom
+      # ON DISK, so the series outlives the container and absent() would only ever fire as a false
+      # alarm. That is a correct argument for why absent() cannot replace Gone, and was wrong as a
+      # reason to omit it: the series really is absent when the file was NEVER written (a first deploy
+      # that failed, `make up` without the pusher in DAEMONS on a host that never had the file), when
+      # the bind mount points somewhere node_exporter does not read, and -- measured -- when the file
+      # becomes UNPARSEABLE, because node_exporter then skips the whole file and publishes no mtime for
+      # it. In every one of those, Gone and Failing are both silent forever: they compare against a
+      # series that does not exist. That is the classic unmonitored-collector shape this file warns
+      # about twelve lines up.
+      #
+      # NeverSucceeded exists because the heartbeat OMITS the success line until the first success
+      # rather than publishing epoch 0 (deliberately -- 0 renders as "last succeeded in 1970"). So a
+      # pusher that has never once succeeded has a fresh file and no success series, and Failing's
+      # first conjunct matches nothing.
+      #
+      # sparky_activity_push.prom is excluded from TextfileCollectorStale above for the reason that
+      # rule's own comment gives: the exclusion and these rules are one unit and neither is correct
+      # alone. Without it a dead pusher raises three alerts for one fault.
       #
       # 1800s = six cycles at the 300s cadence. Not 1800s-for-30m: the pusher writes every five
-      # minutes, so 5m of confirmation is already a full cycle of evidence.
+      # minutes, so 5m of confirmation is already a full cycle of evidence. Note the cadence holds even
+      # when the daemon has parked on an expired Garmin login -- parking slows the LOGIN, not the loop,
+      # precisely so this threshold keeps meaning what it says. It did not always: while the park also
+      # slept the loop, the file was rewritten hourly and these two rules ALTERNATED, with Gone ("it is
+      # dead") arriving before Failing ("it is up and failing") for a daemon that was up and parked
+      # exactly as designed.
       - alert: SparkyActivityPushFailing
         # The daemon is ALIVE -- something is rewriting the file -- but no cycle has SUCCEEDED in
         # 30 minutes. Garmin rate-limiting, an expired Garmin login, or SparkyFitness refusing writes.
         # The mtime guard is what keeps this from also firing when the container is simply dead.
+        #
+        # The guard is 2100s against Gone's 1800s ON PURPOSE, and the 300s is one cycle. Equal
+        # thresholds made the two rules hand over with a hole in the middle: at the instant the mtime
+        # crossed 1800 this rule stopped matching and Gone still owed its 5m `for:`, so Alertmanager
+        # sent a RESOLVED notification for a fault that had just got worse, then re-alerted five
+        # minutes later under a different name. Overlapping instead costs one duplicate alert for five
+        # minutes at that transition, which is the better of the two.
         expr: |
           (time() - sparky_activity_push_last_success_timestamp_seconds > 1800)
           and on(instance)
-          (time() - node_textfile_mtime_seconds{file=~"(.*/)?sparky_activity_push\\.prom"} < 1800)
+          (time() - node_textfile_mtime_seconds{file=~"(.*/)?sparky_activity_push\\.prom"} < 2100)
         for: 5m
         labels:
           severity: warning
+          service: garmin-jobs
         annotations:
           summary: "SparkyFitness activity push has not succeeded in 30 minutes"
           description: "The pusher is running and writing its heartbeat, but no cycle has completed successfully for over 30 minutes, so SparkyFitness's active-calorie rows are going stale. It is not broken data -- Sparky's own Garmin sync still reclaims each day hourly -- but the five-minute freshness this job exists for is gone. Check `make pusher-logs` for a Garmin rate-limit or an expired login."
+          runbook: "`make pusher-logs` in ~/src/garmin-jobs. An expired Garmin login logs `parking the login` and needs `make bootstrap` (interactive, handles MFA) -- the daemon heals itself within the hour once that has run. A 429 logs `rate-limited` and needs nothing. Sparky refusing the write logs the HTTP status; check `docker compose ps` in ~/src/SparkyFitness. `sparky_activity_push_garmin_last_sync_timestamp_seconds` going stale too means the WATCH has not synced, which no amount of restarting here will fix."
       - alert: SparkyActivityPushGone
-        # NOTHING is writing the file: crashed, stopped, deleted, or never started after a deploy.
-        # This is the one that catches `make up` having been run without the pusher in DAEMONS.
+        # NOTHING is writing the file, but the file (and therefore the series) still exists: crashed,
+        # stopped, or never started after a deploy. Missing, below, is the case where it never existed.
         expr: time() - node_textfile_mtime_seconds{file=~"(.*/)?sparky_activity_push\\.prom"} > 1800
         for: 5m
         labels:
           severity: warning
+          service: garmin-jobs
         annotations:
           summary: "SparkyFitness activity pusher has stopped writing its heartbeat"
           description: "Nothing has rewritten sparky_activity_push.prom in over 30 minutes, so the pusher is not running -- crashed, stopped, or never started. Note its metrics are FROZEN rather than absent, so every value in them still looks healthy. Check `docker compose ps pusher`."
+          runbook: "`docker compose ps -a pusher` then `make pusher-logs` in ~/src/garmin-jobs. A container in `created` state has never been started -- that is Ofelia's ensure-containers having manufactured it, and `make up` fixes it. Exited: read the logs, the daemon only exits on SIGTERM. Absent entirely: `make up`, and check `pusher` is in the Makefile's DAEMONS."
+      - alert: SparkyActivityPushHeartbeatMissing
+        # The series does not exist at all -- see the four-way note above for why this is NOT covered
+        # by Gone. `for: 1h` tolerates a deploy or a rules reload without tolerating a broken mount.
+        expr: absent(node_textfile_mtime_seconds{file=~"(.*/)?sparky_activity_push\\.prom"})
+        for: 1h
+        labels:
+          severity: warning
+          service: garmin-jobs
+        annotations:
+          summary: "SparkyFitness activity pusher heartbeat has never appeared"
+          description: "node_exporter is publishing no mtime for sparky_activity_push.prom, so the file has never been written, the bind mount does not point at the directory node_exporter reads, or the file is unparseable and node_exporter is skipping it whole. SparkyActivityPushFailing and SparkyActivityPushGone are both BLIND in this state -- they compare against a series that does not exist."
+          runbook: "Check the file is where both sides think it is: `ls -l ~/src/dockprom/textfile_collector/sparky_activity_push.prom` and that the pusher's `/textfile` mount resolves to that same directory (`docker inspect` the mount source, or TEXTFILE_COLLECTOR_DIR in garmin-jobs' environment file). If the file is present and recent, it is unparseable -- see TextfileCollectorUnparseable and `promtool check metrics < the file`."
+      - alert: SparkyActivityPushNeverSucceeded
+        # A fresh file with no success series. The heartbeat omits that line until the first success
+        # rather than publishing epoch 0, so Failing's first conjunct matches nothing here.
+        expr: |
+          count(node_textfile_mtime_seconds{file=~"(.*/)?sparky_activity_push\\.prom"}) > 0
+          unless
+          count(sparky_activity_push_last_success_timestamp_seconds) > 0
+        for: 30m
+        labels:
+          severity: warning
+          service: garmin-jobs
+        annotations:
+          summary: "SparkyFitness activity pusher has never completed a successful cycle"
+          description: "The pusher is writing its heartbeat but has never once succeeded, so it has been failing since the moment it started. Expect a first deploy that cannot reach SparkyFitness or Garmin at all -- a missing SPARKY_API_KEY, the wrong network, or a token store that was never bootstrapped."
+          runbook: "`make pusher-logs` in ~/src/garmin-jobs; every cycle logs its reason. `make pusher-dry` prints what it would send and whether the key is configured, and runs on the pusher's own service so it inherits the same networks and mounts."
+      # node_exporter's own verdict on the files it read. It sets this per-directory when a .prom
+      # fails to parse and then SKIPS THAT FILE ENTIRELY -- every metric in it disappears rather than
+      # going stale, so none of the mtime rules above can see it. The metric has existed on this host
+      # since node_exporter was deployed and until now nothing used it, which meant a single bad line
+      # from any writer in this directory silently took all of that writer's metrics off the air.
+      #
+      # 15m because a writer publishes atomically (temp file, then rename), so a transient parse
+      # failure is not a shape any of them can produce -- if this is set, it is set until someone fixes
+      # the file.
+      - alert: TextfileCollectorUnparseable
+        expr: node_textfile_scrape_error > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "node_exporter cannot parse a file in its textfile directory"
+          description: "node_exporter reported a textfile parse error. It SKIPS the offending file whole, so that writer's metrics are absent rather than stale and every freshness rule for them is blind -- including the Sparky and ZFS rules in this group."
+          runbook: "`ls -lt ~/src/dockprom/textfile_collector/` — the newest file is the suspect. `promtool check metrics < <file>` names the bad line. Also look for leftover *.tmp files: a writer that died mid-publish leaves one, and a .prom-suffixed temp name would be read as a real file."
+
       - alert: TextfileCollectorStale
         # The doubled backslashes are required and are NOT a typo. This is an unquoted YAML
         # scalar, so `\\.` reaches PromQL verbatim; PromQL then unescapes the string literal to
