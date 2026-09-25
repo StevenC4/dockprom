@@ -250,6 +250,14 @@ services:
         ofelia-mcps|mcp-jobs
         hopper-ofelia|hopper-jobs
         finance-ofelia|finance-jobs
+        # Added 2026-09-22. It was missing since this list was written, which made it exactly the
+        # case the note above warns about: garmin-jobs' ofelia starts five one-shots (the three
+        # detectors, both fitness reports) AND the hourly ensure-containers job that recreates
+        # them after a prune. If it died, all six stopped silently -- ONESHOT_TARGETS would have
+        # reported the five late hours later, describing symptoms rather than the cause, and
+        # ensure-containers has no budget there at all because it is `delete = true` and leaves
+        # no container to inspect.
+        garmin-jobs-scheduler|garmin-jobs
     volumes:
       # Read-only: this only ever inspects. It never starts, stops or creates anything, which
       # is what lets it hold the socket without being another way to mutate the host.
