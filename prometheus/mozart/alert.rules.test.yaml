@@ -334,7 +334,7 @@ tests:
               instance: mozart:9100
             exp_annotations:
               summary: "SparkyFitness activity push has not succeeded in 30 minutes"
-              description: "The pusher is running and writing its heartbeat, but no cycle has completed successfully for over 30 minutes, so SparkyFitness's active-calorie rows are going stale. It is not broken data -- Sparky's own Garmin sync still reclaims each day hourly -- but the five-minute freshness this job exists for is gone. Check `make pusher-logs` for a Garmin rate-limit or an expired login."
+              description: "The pusher is running and writing its heartbeat, but no cycle has completed successfully for over 30 minutes, so SparkyFitness's active-calorie rows are going stale. TODAY's row still self-heals -- Sparky's connector rewrites today hourly -- but a day that CLOSES while this is firing stays wrong permanently: the scheduled sync uses a single-day window (startDate = endDate = today in services/garminService.ts), so nothing ever revisits a closed day. Measured 2026-09-25. Check `make pusher-logs` for a Garmin rate-limit or an expired login."
               runbook: "`make pusher-logs` in ~/src/garmin-jobs. An expired Garmin login logs `parking the login` and needs `make bootstrap` (interactive, handles MFA) -- the daemon heals itself within the hour once that has run. A 429 logs `rate-limited` and needs nothing. Sparky refusing the write logs the HTTP status; check `docker compose ps` in ~/src/SparkyFitness. `sparky_activity_push_garmin_last_sync_timestamp_seconds` going stale too means the WATCH has not synced, which no amount of restarting here will fix."
 
   - interval: 1m
@@ -377,15 +377,17 @@ tests:
   - interval: 1m
     name: pusher failed for an hour then died - coverage must not lapse across the handover
     input_series:
-      # Fresh for 60 minutes, then frozen at 3600. mtime age crosses 1800 at t=90m and 2100 at
-      # t=95m; Gone's `for: 5m` completes at t=95m.
+      # Fresh for 60 minutes, then frozen at 3600. mtime age crosses 1800 at t=90m, Gone's 2m hold
+      # completes at t=92m, and Failing's 2000s guard closes at t=93m20s. The overlap is 92m..93m20s
+      # -- narrow on purpose, and the whole point: Gone is already firing before Failing lets go.
       - series: 'node_textfile_mtime_seconds{instance="mozart:9100",file="/textfile/sparky_activity_push.prom"}'
         values: '0+60x59 3600x200'
       - series: 'sparky_activity_push_last_success_timestamp_seconds{instance="mozart:9100",service="garmin-jobs"}'
         values: '0x260'
     alert_rule_test:
-      # t=94m: inside the old hole. Failing must still be holding the fault.
-      - eval_time: 94m
+      # t=93m: inside the OVERLAP. mtime age is 1980 -- under Failing's 2000 guard, and past Gone's
+      # 1800 + 2m hold. BOTH must be firing here; that overlap is what makes the handover seamless.
+      - eval_time: 93m
         alertname: SparkyActivityPushFailing
         exp_alerts:
           - exp_labels:
@@ -394,13 +396,28 @@ tests:
               instance: mozart:9100
             exp_annotations:
               summary: "SparkyFitness activity push has not succeeded in 30 minutes"
-              description: "The pusher is running and writing its heartbeat, but no cycle has completed successfully for over 30 minutes, so SparkyFitness's active-calorie rows are going stale. It is not broken data -- Sparky's own Garmin sync still reclaims each day hourly -- but the five-minute freshness this job exists for is gone. Check `make pusher-logs` for a Garmin rate-limit or an expired login."
+              description: "The pusher is running and writing its heartbeat, but no cycle has completed successfully for over 30 minutes, so SparkyFitness's active-calorie rows are going stale. TODAY's row still self-heals -- Sparky's connector rewrites today hourly -- but a day that CLOSES while this is firing stays wrong permanently: the scheduled sync uses a single-day window (startDate = endDate = today in services/garminService.ts), so nothing ever revisits a closed day. Measured 2026-09-25. Check `make pusher-logs` for a Garmin rate-limit or an expired login."
               runbook: "`make pusher-logs` in ~/src/garmin-jobs. An expired Garmin login logs `parking the login` and needs `make bootstrap` (interactive, handles MFA) -- the daemon heals itself within the hour once that has run. A 429 logs `rate-limited` and needs nothing. Sparky refusing the write logs the HTTP status; check `docker compose ps` in ~/src/SparkyFitness. `sparky_activity_push_garmin_last_sync_timestamp_seconds` going stale too means the WATCH has not synced, which no amount of restarting here will fix."
-      # t=97m: Gone has taken over and Failing has let go. One fault, one alert, no lapse.
-      - eval_time: 97m
+      # ...and Gone is ALREADY firing at the same instant. This assertion is the overlap itself:
+      # without it the suite would pass with a gap, which is exactly how the 2100/5m version slipped
+      # through and had to be caught by a live drill instead.
+      - eval_time: 93m
+        alertname: SparkyActivityPushGone
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: garmin-jobs
+              instance: mozart:9100
+              file: /textfile/sparky_activity_push.prom
+            exp_annotations:
+              summary: "SparkyFitness activity pusher has stopped writing its heartbeat"
+              description: "Nothing has rewritten sparky_activity_push.prom in over 30 minutes, so the pusher is not running -- crashed, stopped, or never started. Note its metrics are FROZEN rather than absent, so every value in them still looks healthy. Check `docker compose ps pusher`."
+              runbook: "`docker compose ps -a pusher` then `make pusher-logs` in ~/src/garmin-jobs. A container in `created` state has never been started -- that is Ofelia's ensure-containers having manufactured it, and `make up` fixes it. Exited: read the logs, the daemon only exits on SIGTERM. Absent entirely: `make up`, and check `pusher` is in the Makefile's DAEMONS."
+      # t=95m: mtime age 2100, past Failing's guard. Gone alone. One fault, one alert, no lapse.
+      - eval_time: 95m
         alertname: SparkyActivityPushFailing
         exp_alerts: []
-      - eval_time: 97m
+      - eval_time: 95m
         alertname: SparkyActivityPushGone
         exp_alerts:
           - exp_labels:
@@ -504,3 +521,57 @@ tests:
               summary: "node_exporter cannot parse a file in its textfile directory"
               description: "node_exporter reported a textfile parse error. It SKIPS the offending file whole, so that writer's metrics are absent rather than stale and every freshness rule for them is blind -- including the Sparky and ZFS rules in this group."
               runbook: "`ls -lt ~/src/dockprom/textfile_collector/` — the newest file is the suspect. `promtool check metrics < <file>` names the bad line. Also look for leftover *.tmp files: a writer that died mid-publish leaves one, and a .prom-suffixed temp name would be read as a real file."
+
+  # ---------------------------------------------------------------------------
+  # THE ZERO-MARGIN REGRESSION. Found by a live drill on 2026-09-25, not by this suite.
+  #
+  # Failing's condition window is (guard - 1800) + LAG, where LAG is how much older `last_success` is
+  # than the file's mtime. It fires when that exceeds its 300s hold. So the guard buys tolerance:
+  #
+  #     guard 2100  ->  window = 300 + LAG   ->  fires on ANY lag at all
+  #     guard 2000  ->  window = 200 + LAG   ->  fires only once lag exceeds 100s
+  #
+  # With a perfectly healthy daemon LAG is ~0 and both settings behave, which is why the drill still
+  # produced the right answer and why the first version of this test could not tell them apart: it
+  # modelled success and mtime freezing together, the one case where the margin is invisible. Then
+  # Failing merely went pending and dropped at the exact second Gone fired -- correct by a tie.
+  #
+  # LAG is not hypothetical. `last_success` is stamped at cycle COMPLETION and the heartbeat is
+  # written on EVERY cycle including failing ones, so any daemon that fails a cycle and then dies has
+  # a real lag. 120s here: two failed cycles before the container went.
+  #
+  # 120s AND NOT 60s, and the difference is the discrete evaluation grid rather than the arithmetic.
+  # On continuous time a 60s lag separates the two settings; evaluated once a minute the condition
+  # starts one tick late and the guard closes one tick early, which collapses 60s back into a tie.
+  # Simulated across the grid before picking: at 60s neither fires, at 120s only the 2100 guard does,
+  # at 180s both do. 120s is the only value that isolates the change, and finding that required
+  # modelling how Prometheus actually evaluates rather than how the inequality reads.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    name: dead container whose last cycle lagged - Failing must NOT fire alongside Gone
+    input_series:
+      # mtime advances for two minutes then freezes at 120; success is frozen at 0. LAG = 120s.
+      - series: 'node_textfile_mtime_seconds{instance="mozart:9100",file="/textfile/sparky_activity_push.prom"}'
+        values: '0+60x2 120x200'
+      - series: 'sparky_activity_push_last_success_timestamp_seconds{instance="mozart:9100",service="garmin-jobs"}'
+        values: '0x220'
+    alert_rule_test:
+      # t=36m: mtime age 2040. Under the old 2100 guard this is the exact tick where Failing's 300s
+      # hold completes while its condition is still true -- it WOULD fire, giving two alerts for one
+      # dead container. Under 2000 the condition went false a tick earlier and it cannot.
+      - eval_time: 36m
+        alertname: SparkyActivityPushFailing
+        exp_alerts: []
+      # Gone has been firing since t=35m. The dead container is reported once, by the accurate rule.
+      - eval_time: 36m
+        alertname: SparkyActivityPushGone
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: garmin-jobs
+              instance: mozart:9100
+              file: /textfile/sparky_activity_push.prom
+            exp_annotations:
+              summary: "SparkyFitness activity pusher has stopped writing its heartbeat"
+              description: "Nothing has rewritten sparky_activity_push.prom in over 30 minutes, so the pusher is not running -- crashed, stopped, or never started. Note its metrics are FROZEN rather than absent, so every value in them still looks healthy. Check `docker compose ps pusher`."
+              runbook: "`docker compose ps -a pusher` then `make pusher-logs` in ~/src/garmin-jobs. A container in `created` state has never been started -- that is Ofelia's ensure-containers having manufactured it, and `make up` fixes it. Exited: read the logs, the daemon only exits on SIGTERM. Absent entirely: `make up`, and check `pusher` is in the Makefile's DAEMONS."

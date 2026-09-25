@@ -789,29 +789,47 @@ groups:
         # 30 minutes. Garmin rate-limiting, an expired Garmin login, or SparkyFitness refusing writes.
         # The mtime guard is what keeps this from also firing when the container is simply dead.
         #
-        # The guard is 2100s against Gone's 1800s ON PURPOSE, and the 300s is one cycle. Equal
-        # thresholds made the two rules hand over with a hole in the middle: at the instant the mtime
-        # crossed 1800 this rule stopped matching and Gone still owed its 5m `for:`, so Alertmanager
-        # sent a RESOLVED notification for a fault that had just got worse, then re-alerted five
-        # minutes later under a different name. Overlapping instead costs one duplicate alert for five
-        # minutes at that transition, which is the better of the two.
+        # The mtime guard is 2000s against Gone's 1800s, and BOTH numbers were corrected on
+        # 2026-09-25 after the live drill. The history matters because the obvious values are wrong
+        # twice over:
+        #
+        #   * EQUAL thresholds (both 1800) leave a hole. At the instant the mtime crossed 1800 this
+        #     rule stopped matching while Gone still owed its `for:`, so Alertmanager sent RESOLVED
+        #     for a fault that had just got worse, then re-alerted under a different name.
+        #   * 2100 with Gone at `for: 5m` — the first fix — put both rules exactly on a
+        #     discontinuity. The guard window was 2100-1800 = 300s and this rule's `for:` is also
+        #     300s, so it fires only if the window strictly EXCEEDS the hold. MEASURED in the drill:
+        #     this rule went pending at 10:22:00 and dropped at 10:27:19, the same second Gone fired.
+        #     The correct outcome happened with ZERO margin, i.e. by luck.
+        #
+        # So Gone's `for:` came down to 2m and this guard to 2000, which gives both cases real room:
+        #
+        #   dead from cold -> this window is 1800..2000 = 200s against a 300s hold, so it CANNOT
+        #                     fire; Gone is the accurate alert and the only one that does.
+        #   fails then dies -> this rule is already firing and holds until 2000, while Gone starts at
+        #                     1920. 80s of genuine overlap, so coverage never lapses.
         expr: |
           (time() - sparky_activity_push_last_success_timestamp_seconds > 1800)
           and on(instance)
-          (time() - node_textfile_mtime_seconds{file=~"(.*/)?sparky_activity_push\\.prom"} < 2100)
+          (time() - node_textfile_mtime_seconds{file=~"(.*/)?sparky_activity_push\\.prom"} < 2000)
         for: 5m
         labels:
           severity: warning
           service: garmin-jobs
         annotations:
           summary: "SparkyFitness activity push has not succeeded in 30 minutes"
-          description: "The pusher is running and writing its heartbeat, but no cycle has completed successfully for over 30 minutes, so SparkyFitness's active-calorie rows are going stale. It is not broken data -- Sparky's own Garmin sync still reclaims each day hourly -- but the five-minute freshness this job exists for is gone. Check `make pusher-logs` for a Garmin rate-limit or an expired login."
+          description: "The pusher is running and writing its heartbeat, but no cycle has completed successfully for over 30 minutes, so SparkyFitness's active-calorie rows are going stale. TODAY's row still self-heals -- Sparky's connector rewrites today hourly -- but a day that CLOSES while this is firing stays wrong permanently: the scheduled sync uses a single-day window (startDate = endDate = today in services/garminService.ts), so nothing ever revisits a closed day. Measured 2026-09-25. Check `make pusher-logs` for a Garmin rate-limit or an expired login."
           runbook: "`make pusher-logs` in ~/src/garmin-jobs. An expired Garmin login logs `parking the login` and needs `make bootstrap` (interactive, handles MFA) -- the daemon heals itself within the hour once that has run. A 429 logs `rate-limited` and needs nothing. Sparky refusing the write logs the HTTP status; check `docker compose ps` in ~/src/SparkyFitness. `sparky_activity_push_garmin_last_sync_timestamp_seconds` going stale too means the WATCH has not synced, which no amount of restarting here will fix."
       - alert: SparkyActivityPushGone
         # NOTHING is writing the file, but the file (and therefore the series) still exists: crashed,
         # stopped, or never started after a deploy. Missing, below, is the case where it never existed.
+        #
+        # `for: 2m`, not 5m, and it is load-bearing for the rule ABOVE rather than for this one. It
+        # has to start firing before Failing's mtime guard expires, or the two hand over with a gap —
+        # see the long note there. 2m still covers a single missed scrape, which is the only flap this
+        # can realistically see: the file is written every 5 minutes and published atomically.
         expr: time() - node_textfile_mtime_seconds{file=~"(.*/)?sparky_activity_push\\.prom"} > 1800
-        for: 5m
+        for: 2m
         labels:
           severity: warning
           service: garmin-jobs
