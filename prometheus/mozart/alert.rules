@@ -864,6 +864,60 @@ groups:
           summary: "SparkyFitness activity pusher has never completed a successful cycle"
           description: "The pusher is writing its heartbeat but has never once succeeded, so it has been failing since the moment it started. Expect a first deploy that cannot reach SparkyFitness or Garmin at all -- a missing SPARKY_API_KEY, the wrong network, or a token store that was never bootstrapped."
           runbook: "`make pusher-logs` in ~/src/garmin-jobs; every cycle logs its reason. `make pusher-dry` prints what it would send and whether the key is configured, and runs on the pusher's own service so it inherits the same networks and mounts."
+      # --- the positive-effect rules. A different KIND of check from the four above ----------------
+      #
+      # Everything above asks "is the daemon alive and succeeding". None of them can answer "is it
+      # actually CHANGING anything in SparkyFitness", and that gap is not theoretical: a cycle which
+      # correctly decides the value is unchanged counts as a success, deliberately, so the success
+      # stamp moves every five minutes whether or not a single write has ever landed. A pusher whose
+      # every write was silently dropped looks perfect to all four rules above.
+      #
+      # That was the one thing IP1 7.4 could only establish BY HAND, in SparkyFitness's own table, and
+      # only while the evidence survived: `updated_at` holds just the last write, so the connector's
+      # next hourly pass erases it -- a pusher write at 14:12 was gone by 15:00 (measured 2026-09-25).
+      # Requiring a human to notice that inside the hour is not monitoring.
+      #
+      # So the daemon now publishes the time of the last write that LANDED -- excluding both no-ops and
+      # withheld writes -- and these two rules watch it, in place of a weekly manual check.
+      - alert: SparkyActivityPushWritesNotLanding
+        # 26h, and the margin is deliberate rather than round. The pusher's guaranteed floor is ONE
+        # write per day: `cycle._finalise` writes the closed day unconditionally at the first cycle
+        # after local midnight, with no unchanged-check, because a day's figure keeps moving until the
+        # watch's last sync of that day lands. Normal days see several more. So the worst HEALTHY gap
+        # is ~24h plus cycle jitter, and 26h leaves ~2h of headroom against a 10m hold -- the kind of
+        # margin the Failing/Gone pair had to be corrected twice on 2026-09-25 for lacking.
+        # A DST fall-back lengthens the local day by an hour; that is inside the headroom.
+        expr: time() - sparky_activity_push_last_write_timestamp_seconds > 93600
+        for: 10m
+        labels:
+          severity: warning
+          service: garmin-jobs
+        annotations:
+          summary: "SparkyFitness activity pusher has not landed a write in over a day"
+          description: "The pusher is cycling and reporting success, but no write has actually reached SparkyFitness in over 26 hours. Its floor is one write a day -- the closed day's finalisation just after local midnight -- so this means writes are being dropped, withheld, or the finalisation pass is not running. Every other pusher alert is silent in this state BY DESIGN: a cycle that decides nothing changed is a success."
+          runbook: "`make pusher-logs` in ~/src/garmin-jobs; look for `finalised <day>` around 00:02 local, and for `withheld`, which means `pusher.push` is false in config.yaml and the daemon is disarmed. If the log shows `ok (200)` while this is still firing, the write is landing somewhere other than the Active Calories row: check with `make sparky-week`, whose item 4 attributes each closed day's last write by its minute."
+      - alert: SparkyActivityPushHasNeverWritten
+        # The series is omitted until the first landed write (never published as epoch 0, which would
+        # read as 1970 and make the rule above fire instantly on a fresh deploy). So a permanently
+        # disarmed or permanently broken pusher appears here as an absence, not as staleness.
+        #
+        # `for: 26h` is the same floor as above: one rollover suffices to produce the series. Be aware
+        # this hold is NOT durable -- a Prometheus restart resets a pending alert's timer, so a host
+        # rebooted daily could suppress it indefinitely. It is a backstop against a lasting
+        # misconfiguration (arming forgotten after a deploy, a state file wiped), not a precise
+        # 26-hour guarantee. The rule above is the precise one.
+        expr: |
+          count(node_textfile_mtime_seconds{file=~"(.*/)?sparky_activity_push\\.prom"}) > 0
+          unless
+          count(sparky_activity_push_last_write_timestamp_seconds) > 0
+        for: 26h
+        labels:
+          severity: warning
+          service: garmin-jobs
+        annotations:
+          summary: "SparkyFitness activity pusher has never landed a single write"
+          description: "The pusher is writing its heartbeat and may well be reporting successful cycles, but it has never once landed a write in SparkyFitness. Expect `pusher.push: false` in config.yaml -- the daemon running fully but deliberately disarmed -- or a write path that has failed since the first cycle."
+          runbook: "Check `pusher.push` in ~/src/garmin-jobs/config.yaml first; `make pusher-logs` says `withheld, pusher.push is false` on every cycle when that is it, and arming needs `docker compose restart pusher`. Otherwise `make pusher-dry` prints what it would send and whether the key is configured."
       # node_exporter's own verdict on the files it read. It sets this per-directory when a .prom
       # fails to parse and then SKIPS THAT FILE ENTIRELY -- every metric in it disappears rather than
       # going stale, so none of the mtime rules above can see it. The metric has existed on this host
