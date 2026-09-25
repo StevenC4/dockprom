@@ -736,12 +736,55 @@ groups:
       # notices. Adding a collector to this directory means deciding, in the same change,
       # whether it belongs on this rule or needs its own — an exclusion without a replacement
       # rule is not a fix, it is an unmonitored collector.
+      # --- SparkyFitness activity pusher (garmin-jobs) -------------------------------------------
+      #
+      # This daemon SCHEDULES NOTHING, which is why it is deliberately absent from SCHEDULER_TARGETS:
+      # that list's annotations say "every job it schedules has silently stopped", which would
+      # misdescribe every failure of this container. These two rules are the whole of its monitoring.
+      #
+      # They are mutually exclusive on purpose. `absent()` was the original proposal and cannot work:
+      # a dead pusher LEAVES ITS .prom FILE ON DISK, so the series survives a crashed, stopped or even
+      # deleted container and `absent()` would only ever fire in the gap between a rules reload and the
+      # first deploy -- i.e. only as a false alarm. File AGE is the signal that actually distinguishes
+      # the cases, so one rule reads the heartbeat VALUE and the other reads the file's MTIME, each
+      # guarded so a single fault raises a single alert that says the right thing.
+      #
+      # sparky_activity_push.prom is excluded from TextfileCollectorStale above, in this same change,
+      # for the reason that rule's own comment gives: the exclusion and these rules are one unit and
+      # neither is correct alone. Without it a dead pusher raises three alerts for one fault.
+      #
+      # 1800s = six cycles at the 300s cadence. Not 1800s-for-30m: the pusher writes every five
+      # minutes, so 5m of confirmation is already a full cycle of evidence.
+      - alert: SparkyActivityPushFailing
+        # The daemon is ALIVE -- something is rewriting the file -- but no cycle has SUCCEEDED in
+        # 30 minutes. Garmin rate-limiting, an expired Garmin login, or SparkyFitness refusing writes.
+        # The mtime guard is what keeps this from also firing when the container is simply dead.
+        expr: |
+          (time() - sparky_activity_push_last_success_timestamp_seconds > 1800)
+          and on(instance)
+          (time() - node_textfile_mtime_seconds{file=~"(.*/)?sparky_activity_push\\.prom"} < 1800)
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SparkyFitness activity push has not succeeded in 30 minutes"
+          description: "The pusher is running and writing its heartbeat, but no cycle has completed successfully for over 30 minutes, so SparkyFitness's active-calorie rows are going stale. It is not broken data -- Sparky's own Garmin sync still reclaims each day hourly -- but the five-minute freshness this job exists for is gone. Check `make pusher-logs` for a Garmin rate-limit or an expired login."
+      - alert: SparkyActivityPushGone
+        # NOTHING is writing the file: crashed, stopped, deleted, or never started after a deploy.
+        # This is the one that catches `make up` having been run without the pusher in DAEMONS.
+        expr: time() - node_textfile_mtime_seconds{file=~"(.*/)?sparky_activity_push\\.prom"} > 1800
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SparkyFitness activity pusher has stopped writing its heartbeat"
+          description: "Nothing has rewritten sparky_activity_push.prom in over 30 minutes, so the pusher is not running -- crashed, stopped, or never started. Note its metrics are FROZEN rather than absent, so every value in them still looks healthy. Check `docker compose ps pusher`."
       - alert: TextfileCollectorStale
         # The doubled backslashes are required and are NOT a typo. This is an unquoted YAML
         # scalar, so `\\.` reaches PromQL verbatim; PromQL then unescapes the string literal to
         # `\.` for the regex engine. A single `\.` here is a PromQL parse error ("unknown escape
         # sequence"), which takes the whole rules file down, not just this rule.
-        expr: time() - node_textfile_mtime_seconds{file!~"(.*/)?(zfs-metrics|oneshot_jobs|nh22_extractor|nh22_cdbaby_reauth_reminder)\\.prom"} > 3600
+        expr: time() - node_textfile_mtime_seconds{file!~"(.*/)?(zfs-metrics|oneshot_jobs|nh22_extractor|nh22_cdbaby_reauth_reminder|sparky_activity_push)\\.prom"} > 3600
         for: 30m
         labels:
           severity: warning
