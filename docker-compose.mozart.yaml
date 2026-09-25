@@ -265,6 +265,13 @@ services:
         # no file to go stale, and one that crash-loops after writing looks healthy to a freshness
         # rule. The three SchedulerDaemon* annotations were reworded to stop assuming scheduling.
         garmin-sparky-pusher|garmin-jobs
+        # Added 2026-09-25 as DEF-7's third remedy, and the cheapest of the three. This gateway
+        # crash-looped 691 times over TWELVE HOURS on 2026-09-25 -- every slash command for every
+        # backend behind it dead the whole time -- and nothing noticed, because nothing watched it.
+        # `scheduler_daemon_restart_count` catches exactly that shape, and would have caught it
+        # within the hour regardless of the cause. The per-channel degradation fix means this
+        # particular cause cannot recur; the alert is what covers the next one.
+        homelab-slack-gateway|homelab-slack
     volumes:
       # Read-only: this only ever inspects. It never starts, stops or creates anything, which
       # is what lets it hold the socket without being another way to mutate the host.
