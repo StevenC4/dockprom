@@ -272,6 +272,17 @@ services:
         # within the hour regardless of the cause. The per-channel degradation fix means this
         # particular cause cannot recur; the alert is what covers the next one.
         homelab-slack-gateway|homelab-slack
+        # Added 2026-10-16 (Phoenix gate 11, Requirement 8 finding 2). Nothing watched the SparkyFitness
+        # stack: container_disappeared is filtered to monitor_group="monitoring", and -- found the
+        # same day -- mozart's cAdvisor exports NO Docker containers at all (one root-cgroup series),
+        # so un-filtering it would have covered nothing. This list reads the docker socket directly,
+        # which is why it works. The connector was meant to be here per Requirement 8 and never was.
+        # Own service label so these route on their own; alertmanager sends it to email AND Slack.
+        sparkyfitness-sparkyfitness-frontend-1|sparkyfitness
+        sparkyfitness-sparkyfitness-server-1|sparkyfitness
+        sparkyfitness-db|sparkyfitness
+        sparkyfitness-garmin|sparkyfitness
+        sparkyfitness-custom-mcp|sparkyfitness
     volumes:
       # Read-only: this only ever inspects. It never starts, stops or creates anything, which
       # is what lets it hold the socket without being another way to mutate the host.

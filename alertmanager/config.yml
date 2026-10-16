@@ -57,7 +57,7 @@ route:
         group_by: ['alertname', 'container']
         # Was 6h; inherits the 24h cap now.
 
-      # SparkyFitness / Garmin pipeline (garmin-jobs): email AND Slack, via the same alert-ack
+      # SparkyFitness / Garmin pipeline (garmin-jobs, and the sparkyfitness container stack): email AND Slack, via the same alert-ack
       # webhook as nh22 -- added 2026-10-16 (Phoenix gate 11).
       #
       # Until now this service had no route and fell through to the default receiver, which is
@@ -76,7 +76,7 @@ route:
       # group_by and repeat_interval are inherited (alertname/hostname, 24h), exactly as the
       # default route had them, so the only change is the extra receiver.
       - matchers:
-          - service="garmin-jobs"
+          - service=~"garmin-jobs|sparkyfitness"
         receiver: 'garmin-slack'
 
       # NightHawk22 extractor: auth breakage -> email AND Slack; everything else
