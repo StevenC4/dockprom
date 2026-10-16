@@ -161,3 +161,34 @@ def test_a_failed_post_is_not_remembered(fake, store, monkeypatch):
     monkeypatch.setattr(notify.slack, "post_message", lambda **_: None)
     assert notify.handle_firing(payload(), token=TOKEN, channel=CHANNEL, store=store) is None
     assert store.posts_for(payload()["groupKey"]) == []
+
+
+def _payload(status="firing", name="SparkyX", receiver="garmin-slack"):
+    return {
+        "status": status,
+        "receiver": receiver,
+        "groupKey": f"{{}}:{{alertname=\"{name}\"}}",
+        "commonLabels": {"service": "garmin-jobs", "alertname": name, "severity": "warning"},
+        "alerts": [{"labels": {"alertname": name}, "annotations": {"summary": "s"}}],
+    }
+
+
+def test_firing_is_written_to_the_deliveries_ledger(fake, store):
+    notify.handle(_payload(), token="t", channel="C1", store=store)
+    [(_, status, receiver, service, names, ok, ts)] = store.deliveries()
+    assert (status, receiver, service, names, ok) == ("firing", "garmin-slack", "garmin-jobs", "SparkyX", 1)
+    assert ts
+
+
+def test_a_failed_slack_post_is_ledgered_as_failed(fake, store, monkeypatch):
+    monkeypatch.setattr(slack, "post_message", lambda **kw: None)
+    notify.handle(_payload(), token="t", channel="C1", store=store)
+    assert store.deliveries()[0][5] == 0
+
+
+def test_a_ledger_failure_never_breaks_the_alert(fake, store, monkeypatch):
+    def boom(**kw):
+        raise RuntimeError("disk full")
+    monkeypatch.setattr(store, "record_delivery", boom)
+    notify.handle(_payload(), token="t", channel="C1", store=store)
+    assert store.posts_for(_payload()["groupKey"])  # the Slack post still happened and is tracked

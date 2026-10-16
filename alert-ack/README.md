@@ -127,3 +127,20 @@ Alertmanager counts the failure — half-configured is the one state not support
 4. Bot scopes `chat:write`, `reactions:write`, `channels:history` (`groups:history` if private),
    **and the bot invited to the channel** — otherwise `conversations.history` answers
    `not_in_channel` and the backlog sweep silently finds nothing.
+
+## The deliveries ledger — did this alert reach #alerts?
+
+Alertmanager at its default log level never logs a successful notification, and its notifier
+counters are shared across receivers, so afterwards nothing can say which alert was delivered.
+Every notification this service handles is therefore appended to the `deliveries` table (on the
+data volume, so it survives the container being recreated):
+
+```bash
+docker exec alert-ack python -m alert_ack deliveries --alertname Sparky --since-hours 48
+```
+
+`slack=FAILED` means the `chat.postMessage` call failed (e.g. `invalid_auth`); the email on the
+same receiver is unaffected. **Email is not recorded here** — a row proves Alertmanager dispatched
+the receiver, and the email half is shown by the `smtpd` postfix log (`status=sent`, UTC, one
+line per message, no subject). Receivers without the webhook (the default `email` route) leave no
+row at all.

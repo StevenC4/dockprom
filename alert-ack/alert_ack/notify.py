@@ -138,6 +138,33 @@ def handle_resolved(
     return greened, swept
 
 
+def _record_delivery(
+    payload: dict[str, Any], store: Store, *, slack_ok: bool, slack_ts: str
+) -> None:
+    """Append to the deliveries ledger. Never raises: attribution must not cost an alert."""
+    try:
+        service, _ = _common(payload)
+        names = sorted(
+            {
+                str((a.get("labels") or {}).get("alertname") or "")
+                for a in payload.get("alerts") or []
+                if isinstance(a, dict)
+            }
+            - {""}
+        )
+        store.record_delivery(
+            status=str(payload.get("status") or ""),
+            receiver=str(payload.get("receiver") or ""),
+            service=service,
+            alertnames=",".join(names),
+            group_key=str(payload.get("groupKey") or ""),
+            slack_ok=slack_ok,
+            slack_ts=slack_ts,
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("could not record delivery")
+
+
 def handle(
     payload: dict[str, Any],
     *,
@@ -148,10 +175,14 @@ def handle(
 ) -> None:
     status = str(payload.get("status") or "")
     if status == "firing":
-        handle_firing(payload, token=token, channel=channel, store=store)
+        ts = handle_firing(payload, token=token, channel=channel, store=store)
+        _record_delivery(payload, store, slack_ok=ts is not None, slack_ts=ts or "")
     elif status == "resolved":
+        # A resolve edits earlier posts rather than posting, so "ok" here means only that the
+        # notification was handled without raising.
         handle_resolved(
             payload, token=token, channel=channel, store=store, enqueue_sweep=enqueue_sweep
         )
+        _record_delivery(payload, store, slack_ok=True, slack_ts="")
     else:
         log.warning("ignoring alertmanager webhook with status %r", status)

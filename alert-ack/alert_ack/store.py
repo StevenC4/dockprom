@@ -12,6 +12,12 @@ Two tables, because they answer two different questions:
 
 ``posts``  - what WE authored via chat.postMessage, keyed by Alertmanager's ``groupKey``. These
              are editable, so a resolve rewrites them green in place.
+``deliveries`` - one row per Alertmanager notification this service handled, and the Slack
+             outcome of it. Exists because Alertmanager at its default log level never records a
+             success and its counters are shared across receivers, so after the fact nothing else
+             can say "this alert reached #alerts". Durable for the same reason ``posts`` is: it
+             must survive the container being recreated, which is what an investigation does.
+
 ``swept``  - which webhook-authored posts we have already reacted to and thread-replied on.
              Slack's ``reactions.add`` is naturally idempotent (it answers ``already_reacted``),
              but a thread reply is NOT: without this table a recurring alert would drop a fresh
@@ -40,6 +46,19 @@ CREATE TABLE IF NOT EXISTS posts (
     PRIMARY KEY (channel, ts)
 );
 CREATE INDEX IF NOT EXISTS posts_by_group ON posts (group_key);
+
+CREATE TABLE IF NOT EXISTS deliveries (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    received_at INTEGER NOT NULL,
+    status      TEXT    NOT NULL,
+    receiver    TEXT    NOT NULL,
+    service     TEXT    NOT NULL,
+    alertnames  TEXT    NOT NULL,
+    group_key   TEXT    NOT NULL,
+    slack_ok    INTEGER NOT NULL,
+    slack_ts    TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS deliveries_by_time ON deliveries (received_at);
 
 CREATE TABLE IF NOT EXISTS swept (
     channel   TEXT    NOT NULL,
@@ -104,11 +123,43 @@ class Store:
             )
             self._db.commit()
 
+    def record_delivery(
+        self,
+        *,
+        status: str,
+        receiver: str,
+        service: str,
+        alertnames: str,
+        group_key: str,
+        slack_ok: bool,
+        slack_ts: str = "",
+    ) -> None:
+        with self._lock:
+            self._db.execute(
+                "INSERT INTO deliveries (received_at, status, receiver, service, alertnames, "
+                "group_key, slack_ok, slack_ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (int(time.time()), status, receiver, service, alertnames, group_key,
+                 int(slack_ok), slack_ts),
+            )
+            self._db.commit()
+
+    def deliveries(self, since: int = 0, alertname: str = "") -> list[tuple]:
+        """(received_at, status, receiver, service, alertnames, slack_ok, slack_ts), oldest first."""
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT received_at, status, receiver, service, alertnames, slack_ok, slack_ts "
+                "FROM deliveries WHERE received_at >= ? AND (? = '' OR alertnames LIKE ?) "
+                "ORDER BY id",
+                (since, alertname, f"%{alertname}%"),
+            ).fetchall()
+        return rows
+
     def prune(self, retention_s: int = RETENTION_S) -> int:
         cutoff = int(time.time()) - retention_s
         with self._lock:
             n = self._db.execute("DELETE FROM posts WHERE posted_at < ?", (cutoff,)).rowcount
             self._db.execute("DELETE FROM swept WHERE swept_at < ?", (cutoff,))
+            self._db.execute("DELETE FROM deliveries WHERE received_at < ?", (cutoff,))
             self._db.commit()
         return max(0, n)
 

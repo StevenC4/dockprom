@@ -57,6 +57,28 @@ route:
         group_by: ['alertname', 'container']
         # Was 6h; inherits the 24h cap now.
 
+      # SparkyFitness / Garmin pipeline (garmin-jobs): email AND Slack, via the same alert-ack
+      # webhook as nh22 -- added 2026-10-16 (Phoenix gate 11).
+      #
+      # Until now this service had no route and fell through to the default receiver, which is
+      # EMAIL ONLY. Requirement 8's acceptance says "alerts reach both email and Slack", so the
+      # gate was unmet by construction; and during the 2026-10-11..14 Garmin gap the two
+      # Sparky alerts fired for ~49h with no way to show a human was told. Routing here also
+      # lands every notification in alert-ack's `deliveries` ledger, which is what makes
+      # "did this alert reach #alerts" answerable afterwards:
+      #   docker exec alert-ack python -m alert_ack deliveries --alertname Sparky
+      #
+      # NB this covers EVERY garmin-jobs alert, not just the Sparky ones: OneShotJobStale and
+      # friends for garmin-analytics-ingest, the detectors and the fitness reports now post to
+      # #alerts as well as email. Deliberate -- same service, same owner -- but it is more
+      # volume than the Sparky rules alone. Narrow it with another matcher if it proves noisy.
+      #
+      # group_by and repeat_interval are inherited (alertname/hostname, 24h), exactly as the
+      # default route had them, so the only change is the extra receiver.
+      - matchers:
+          - service="garmin-jobs"
+        receiver: 'garmin-slack'
+
       # NightHawk22 extractor: auth breakage -> email AND Slack; everything else
       # (data staleness, run errors) -> Slack.
       #
@@ -220,6 +242,15 @@ receivers:
   # Both blocks are ALIASES of nh22-slack's, not copies: two divergent renderings of the
   # same alert is how a template fix lands on one channel and not the other.
   - name: 'nh22-auth'
+    email_configs:
+    - *email_config
+    webhook_configs:
+    - *nh22_webhook_config
+
+  # garmin-jobs: email first and unconditionally, then the alert-ack webhook. Same shape and the
+  # same aliased blocks as nh22-slack, for the same reason: a dead alert-ack costs the Slack
+  # rendering and nothing else.
+  - name: 'garmin-slack'
     email_configs:
     - *email_config
     webhook_configs:
