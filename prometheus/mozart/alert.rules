@@ -918,6 +918,55 @@ groups:
           summary: "SparkyFitness activity pusher has never landed a single write"
           description: "The pusher is writing its heartbeat and may well be reporting successful cycles, but it has never once landed a write in SparkyFitness. Expect `pusher.push: false` in config.yaml -- the daemon running fully but deliberately disarmed -- or a write path that has failed since the first cycle."
           runbook: "Check `pusher.push` in ~/src/garmin-jobs/config.yaml first; `make pusher-logs` says `withheld, pusher.push is false` on every cycle when that is it, and arming needs `docker compose restart pusher`. Otherwise `make pusher-dry` prints what it would send and whether the key is configured."
+      # --- Garmin DEVICE sync age (garmin-jobs) -------------------------------------------------
+      #
+      # Names the cause the pusher alerts above can only blame on the write path. 2026-10-11..14 the
+      # WATCH stopped syncing; Garmin returned empty days, every pusher cycle "failed" for ~49h
+      # (Failing + WritesNotLanding), and the write path -- Sparky, the connector, the auth -- was
+      # healthy throughout. Diagnosis took a Prometheus archaeology session. This rule would have
+      # said "the watch has not synced" on day one. (Requirement 8, finding 3.)
+      #
+      # The metric is `sparky_activity_push_garmin_last_sync_timestamp_seconds`, written by the
+      # pusher. The spec called it garmin_last_sync_timestamp_seconds, which does not exist.
+      #
+      # THRESHOLDS ARE FROM DATA, NOT THE SPEC'S 4h. Over 2026-10-08..16 the normal age peaks at
+      # ~14.5h around the morning wake-up (no overnight sync) and the median is 2.5h; a 4h
+      # threshold would have been above threshold in 57% of all samples, i.e. every night. 18h is
+      # ~25% over the worst normal day; 24h is unambiguous (the real gap ran 78h). Only ONE gap and
+      # 8 days of history (Prometheus retains ~8d), so re-tune after Runbook 6 Step 4's week -- and
+      # a day deliberately without the watch WILL trip the 24h rule.
+      #
+      # GATED on the pusher's heartbeat being fresh (the same 2000s guard Failing uses). The sync
+      # timestamp lives in the same textfile as the pusher's other metrics, and a dead pusher
+      # leaves that file -- and this frozen value -- on disk. Without the gate a dead pusher would
+      # be reported here as "the watch has not synced", the same misattribution in the other
+      # direction. SparkyActivityPushGone owns that case.
+      - alert: GarminDeviceSyncStale
+        expr: |
+          (time() - sparky_activity_push_garmin_last_sync_timestamp_seconds > 64800)
+          and on()
+          (time() - node_textfile_mtime_seconds{file=~"(.*/)?sparky_activity_push\\.prom"} < 2000)
+        for: 30m
+        labels:
+          severity: warning
+          service: garmin-jobs
+        annotations:
+          summary: "Garmin watch has not synced in over 18 hours"
+          description: "The Garmin device's last sync was more than 18 hours ago, while the pusher itself is running. Garmin returns empty days until the watch syncs, so Sparky's Burned figure and the Remaining calories derived from it are stale -- and SparkyActivityPushFailing / WritesNotLanding may fire as a SYMPTOM of this, not a fault in the write path. Normal peak is ~14.5h (morning wake-up)."
+          runbook: "Open Garmin Connect on the phone and force a sync; check the watch is paired and Bluetooth is on. Nothing on mozart needs restarting. If the app syncs but this does not clear within the hour, check `sparky_activity_push_garmin_last_sync_timestamp_seconds` and `make pusher-logs` in ~/src/garmin-jobs."
+      - alert: GarminDeviceSyncDead
+        expr: |
+          (time() - sparky_activity_push_garmin_last_sync_timestamp_seconds > 86400)
+          and on()
+          (time() - node_textfile_mtime_seconds{file=~"(.*/)?sparky_activity_push\\.prom"} < 2000)
+        for: 30m
+        labels:
+          severity: critical
+          service: garmin-jobs
+        annotations:
+          summary: "Garmin watch has not synced in over 24 hours"
+          description: "The Garmin device has not synced for more than a day. This does not happen without a real fault (dead battery, lost pairing, phone app logged out, watch left behind). Every day that closes in this state is wrong in Sparky until a backfill: the sync window is a single day and nothing revisits a closed day."
+          runbook: "Get the watch syncing, then backfill the missed days -- see Runbook 6 6.8 (the 2026-10-16 gap). Do not restart containers; the write path is not the cause."
       # node_exporter's own verdict on the files it read. It sets this per-directory when a .prom
       # fails to parse and then SKIPS THAT FILE ENTIRELY -- every metric in it disappears rather than
       # going stale, so none of the mtime rules above can see it. The metric has existed on this host

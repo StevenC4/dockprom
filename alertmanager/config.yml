@@ -301,6 +301,15 @@ inhibit_rules:
       - alertname="OneShotJobStale"
     equal: ['hostname', 'service']
 
+  # Device-dead explains device-stale: GarminDeviceSyncStale (>18h) keeps firing underneath
+  # GarminDeviceSyncDead (>24h) for the same fault, so the warning adds a second thread for
+  # nothing once the critical is up. The critical is never inhibited.
+  - source_matchers:
+      - alertname="GarminDeviceSyncDead"
+    target_matchers:
+      - alertname="GarminDeviceSyncStale"
+    equal: ['hostname']
+
   # The nh22 scheduler also explains stale nh22 extractor signals.
   #
   # This one crosses services — the source is service="nh22-jobs" and the

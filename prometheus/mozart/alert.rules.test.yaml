@@ -575,3 +575,78 @@ tests:
               summary: "SparkyFitness activity pusher has stopped writing its heartbeat"
               description: "Nothing has rewritten sparky_activity_push.prom in over 30 minutes, so the pusher is not running -- crashed, stopped, or never started. Note its metrics are FROZEN rather than absent, so every value in them still looks healthy. Check `docker compose ps pusher`."
               runbook: "`docker compose ps -a pusher` then `make pusher-logs` in ~/src/garmin-jobs. A container in `created` state has never been started -- that is Ofelia's ensure-containers having manufactured it, and `make up` fixes it. Exited: read the logs, the daemon only exits on SIGTERM. Absent entirely: `make up`, and check `pusher` is in the Makefile's DAEMONS."
+
+  # ---------------------------------------------------------------------------
+  # GarminDeviceSyncStale / GarminDeviceSyncDead
+  #
+  # Two gates: the age thresholds (18h / 24h, from data -- 4h would page every night), and the
+  # pusher-heartbeat guard that stops a DEAD pusher's frozen sync timestamp being reported as a
+  # watch that has not synced. Series values are the TIMESTAMPS, so ages are set by eval_time.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    name: device synced 14h ago (normal morning peak) - must stay silent
+    input_series:
+      - series: 'sparky_activity_push_garmin_last_sync_timestamp_seconds{service="garmin-jobs"}'
+        values: '0x1000'
+      - series: 'node_textfile_mtime_seconds{file="/textfile_collector/sparky_activity_push.prom"}'
+        values: '50400+60x1000'
+    alert_rule_test:
+      - eval_time: 840m
+        alertname: GarminDeviceSyncStale
+        exp_alerts: []
+
+  - interval: 1m
+    name: device last synced 19h ago with a live pusher - warning fires, critical does not
+    input_series:
+      - series: 'sparky_activity_push_garmin_last_sync_timestamp_seconds{service="garmin-jobs"}'
+        values: '0x2000'
+      - series: 'node_textfile_mtime_seconds{file="/textfile_collector/sparky_activity_push.prom"}'
+        values: '0+60x2000'
+    alert_rule_test:
+      - eval_time: 1200m
+        alertname: GarminDeviceSyncStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: garmin-jobs
+            exp_annotations:
+              summary: "Garmin watch has not synced in over 18 hours"
+              description: "The Garmin device's last sync was more than 18 hours ago, while the pusher itself is running. Garmin returns empty days until the watch syncs, so Sparky's Burned figure and the Remaining calories derived from it are stale -- and SparkyActivityPushFailing / WritesNotLanding may fire as a SYMPTOM of this, not a fault in the write path. Normal peak is ~14.5h (morning wake-up)."
+              runbook: "Open Garmin Connect on the phone and force a sync; check the watch is paired and Bluetooth is on. Nothing on mozart needs restarting. If the app syncs but this does not clear within the hour, check `sparky_activity_push_garmin_last_sync_timestamp_seconds` and `make pusher-logs` in ~/src/garmin-jobs."
+      - eval_time: 1200m
+        alertname: GarminDeviceSyncDead
+        exp_alerts: []
+
+  - interval: 1m
+    name: device last synced 25h ago with a live pusher - critical fires
+    input_series:
+      - series: 'sparky_activity_push_garmin_last_sync_timestamp_seconds{service="garmin-jobs"}'
+        values: '0x2000'
+      - series: 'node_textfile_mtime_seconds{file="/textfile_collector/sparky_activity_push.prom"}'
+        values: '0+60x2000'
+    alert_rule_test:
+      - eval_time: 1500m
+        alertname: GarminDeviceSyncDead
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: garmin-jobs
+            exp_annotations:
+              summary: "Garmin watch has not synced in over 24 hours"
+              description: "The Garmin device has not synced for more than a day. This does not happen without a real fault (dead battery, lost pairing, phone app logged out, watch left behind). Every day that closes in this state is wrong in Sparky until a backfill: the sync window is a single day and nothing revisits a closed day."
+              runbook: "Get the watch syncing, then backfill the missed days -- see Runbook 6 6.8 (the 2026-10-16 gap). Do not restart containers; the write path is not the cause."
+
+  - interval: 1m
+    name: pusher dead (heartbeat file stale) so the sync timestamp is frozen - device rules stay silent
+    input_series:
+      - series: 'sparky_activity_push_garmin_last_sync_timestamp_seconds{service="garmin-jobs"}'
+        values: '0x2000'
+      - series: 'node_textfile_mtime_seconds{file="/textfile_collector/sparky_activity_push.prom"}'
+        values: '0x2000'
+    alert_rule_test:
+      - eval_time: 1500m
+        alertname: GarminDeviceSyncDead
+        exp_alerts: []
+      - eval_time: 1500m
+        alertname: GarminDeviceSyncStale
+        exp_alerts: []
