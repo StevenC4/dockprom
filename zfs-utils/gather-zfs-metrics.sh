@@ -123,5 +123,22 @@ BEGIN { pool = ""; in_scrub = 0; scrub_pct = 0; }
 }
 ' >> $METRICS_FILE
 
+# Snapshot age for the datasets under the host's sanoid policy (Phoenix Runbook 1, PHX-18).
+# The dataset list is read from the [datavault/...] headers of sanoid.conf, mounted read-only, so
+# a dataset added to the policy is watched without editing this file. Only @autosnap_ snapshots
+# count: a manual snapshot must not make a dead sanoid look healthy. A policy dataset with no
+# autosnap at all reports 0, which reads as maximally stale rather than absent. If the config is
+# not mounted, nothing is emitted and ZfsSnapshotMetricsAbsent fires.
+SANOID_CONF=/etc/sanoid/sanoid.conf
+echo "# HELP zfs_newest_snapshot_timestamp_seconds Creation time of the newest sanoid autosnap of a policy dataset (0 = none)" >> $METRICS_FILE
+echo "# TYPE zfs_newest_snapshot_timestamp_seconds gauge" >> $METRICS_FILE
+if [ -f "$SANOID_CONF" ]; then
+  for ds in $(awk -F'[][]' '/^\[datavault\//{print $2}' "$SANOID_CONF"); do
+    ts=$(zfs list -Hp -t snapshot -o name,creation -s creation -d 1 "$ds" 2>/dev/null \
+      | awk -F'\t' '$1 ~ /@autosnap_/ {t=$2} END {print t+0}')
+    echo "zfs_newest_snapshot_timestamp_seconds{dataset=\"$ds\"} ${ts:-0}" >> $METRICS_FILE
+  done
+fi
+
 # Set ownership of the metrics file
 chown ${PUID:-1000}:${PGID:-1000} $METRICS_FILE

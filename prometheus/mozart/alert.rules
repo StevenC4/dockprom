@@ -998,3 +998,45 @@ groups:
         annotations:
           summary: "Textfile collector {{ $labels.file }} has stopped updating"
           description: "{{ $labels.file }} has not been written in over an hour. Its metrics are frozen at their last values rather than absent, so they will look healthy."
+
+  # ZFS snapshot policy (Phoenix Runbook 1, PHX-18). sanoid runs from a host systemd timer, not
+  # from anything in this repo, so the snapshots themselves are the only evidence it is working.
+  # zfs_newest_snapshot_timestamp_seconds is written by gather-zfs-metrics.sh; if that collector
+  # dies the series freezes and ages, so these still fire (alongside ZfsMetricsStale).
+  - name: zfs-snapshots
+    rules:
+      # Database datasets are snapshotted hourly. 2h = one missed hourly plus slack.
+      - alert: ZfsSnapshotStale
+        expr: time() - zfs_newest_snapshot_timestamp_seconds{dataset=~".*-db"} > 7200
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No ZFS snapshot of {{ $labels.dataset }} in over 2 hours"
+          description: "{{ $labels.dataset }} is on an hourly sanoid policy and has gone more than 2 hours without a new autosnap. The local recovery tier for this database is no longer advancing."
+          runbook: "On mozart: `systemctl is-active sanoid.timer`, then `journalctl -u sanoid.service -n 50`."
+
+      # File datasets are daily only, so they must NOT share the 2h rule above: it would fire
+      # ~22 hours of every 24. 30h = one daily interval plus 6h slack. sanoid runs with TZ=UTC,
+      # so its own cadence has no DST shift.
+      - alert: ZfsSnapshotStaleDaily
+        expr: time() - zfs_newest_snapshot_timestamp_seconds{dataset!~".*-db"} > 108000
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No ZFS snapshot of {{ $labels.dataset }} in over 30 hours"
+          description: "{{ $labels.dataset }} is on a daily sanoid policy and has gone more than 30 hours without a new autosnap."
+          runbook: "On mozart: `systemctl is-active sanoid.timer`, then `journalctl -u sanoid.service -n 50`."
+
+      # The rules above can only fire on series that exist. If sanoid.conf is not mounted into
+      # zfs-utils, or the collector loses the block, there are no series and both are silent.
+      - alert: ZfsSnapshotMetricsAbsent
+        expr: absent(zfs_newest_snapshot_timestamp_seconds)
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No ZFS snapshot-age metrics at all"
+          description: "zfs_newest_snapshot_timestamp_seconds is absent, so ZfsSnapshotStale and ZfsSnapshotStaleDaily cannot fire. Snapshot policy is unmonitored."
+          runbook: "Check that /etc/sanoid/sanoid.conf exists on mozart and is mounted into the zfs-utils container."

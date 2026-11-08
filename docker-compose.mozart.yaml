@@ -170,6 +170,8 @@ services:
     volumes:
       - /dev:/dev:ro
       - ./textfile_collector:/zfs-metrics
+      # Read by gather-zfs-metrics.sh for the snapshot-age dataset list (Phoenix Runbook 1).
+      - /etc/sanoid/sanoid.conf:/etc/sanoid/sanoid.conf:ro
     labels:
       - com.centurylinklabs.watchtower.enable=false
 

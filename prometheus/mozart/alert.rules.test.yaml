@@ -650,3 +650,76 @@ tests:
       - eval_time: 1500m
         alertname: GarminDeviceSyncStale
         exp_alerts: []
+
+  # ---------------------------------------------------------------------------
+  # ZfsSnapshotStale / ZfsSnapshotStaleDaily / ZfsSnapshotMetricsAbsent
+  #
+  # The split between the hourly and daily rules is the gate: a file dataset legitimately goes
+  # ~24h between snapshots, and a single 2h rule would page on it every day. Asserted both ways.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    name: daily file dataset 29h since snapshot - must stay silent on both rules
+    input_series:
+      - series: 'zfs_newest_snapshot_timestamp_seconds{dataset="datavault/backups"}'
+        values: '0x1900'
+    alert_rule_test:
+      - eval_time: 29h
+        alertname: ZfsSnapshotStale
+        exp_alerts: []
+      - eval_time: 29h
+        alertname: ZfsSnapshotStaleDaily
+        exp_alerts: []
+
+  - interval: 1m
+    name: daily file dataset 31h since snapshot - must fire
+    input_series:
+      - series: 'zfs_newest_snapshot_timestamp_seconds{dataset="datavault/backups"}'
+        values: '0x1900'
+    alert_rule_test:
+      - eval_time: 31h
+        alertname: ZfsSnapshotStaleDaily
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              dataset: datavault/backups
+            exp_annotations:
+              summary: "No ZFS snapshot of datavault/backups in over 30 hours"
+              description: "datavault/backups is on a daily sanoid policy and has gone more than 30 hours without a new autosnap."
+              runbook: "On mozart: `systemctl is-active sanoid.timer`, then `journalctl -u sanoid.service -n 50`."
+
+  - interval: 1m
+    name: hourly database dataset - silent while fresh, fires once snapshots stop
+    input_series:
+      # Advances with the clock for the first hour, then freezes at t=3600.
+      - series: 'zfs_newest_snapshot_timestamp_seconds{dataset="datavault/sparkyfitness-db"}'
+        values: '0+60x60 3600x180'
+    alert_rule_test:
+      - eval_time: 2h
+        alertname: ZfsSnapshotStale
+        exp_alerts: []
+      - eval_time: 210m
+        alertname: ZfsSnapshotStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              dataset: datavault/sparkyfitness-db
+            exp_annotations:
+              summary: "No ZFS snapshot of datavault/sparkyfitness-db in over 2 hours"
+              description: "datavault/sparkyfitness-db is on an hourly sanoid policy and has gone more than 2 hours without a new autosnap. The local recovery tier for this database is no longer advancing."
+              runbook: "On mozart: `systemctl is-active sanoid.timer`, then `journalctl -u sanoid.service -n 50`."
+
+  - interval: 1m
+    name: no snapshot-age series at all - must fire
+    input_series:
+      - series: 'up{job="node"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ZfsSnapshotMetricsAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "No ZFS snapshot-age metrics at all"
+              description: "zfs_newest_snapshot_timestamp_seconds is absent, so ZfsSnapshotStale and ZfsSnapshotStaleDaily cannot fire. Snapshot policy is unmonitored."
+              runbook: "Check that /etc/sanoid/sanoid.conf exists on mozart and is mounted into the zfs-utils container."
