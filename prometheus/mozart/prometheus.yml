@@ -34,6 +34,21 @@ scrape_configs:
           host: 192.168.205.10
           hostname: mozart
 
+  # dalza (Mac Mini, macOS arm64) — brew node_exporter under launchd.
+  # PHX-67 / Verification 4: seven nights of up{instance="dalza:9100"} with no
+  # gap > 2 scrape intervals. Measures reachability, not any backup job.
+  # Own job (not 'nodeexporter') so Linux-shaped node panels and queries keyed
+  # on job="nodeexporter" don't pick up a Darwin host. Labels are from what the
+  # name resolves to inside this container (192.168.205.50), not copied from
+  # the satellites/federation blocks below, whose labels disagree (PHX-35).
+  - job_name: 'dalza'
+    scrape_interval: 15s
+    static_configs:
+      - targets: ['dalza:9100']
+        labels:
+          host: 192.168.205.50
+          hostname: dalza
+
   - job_name: 'prometheus'
     scrape_interval: 15s
     static_configs:
