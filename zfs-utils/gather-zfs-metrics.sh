@@ -5,7 +5,11 @@
 # .prom, so the textfile collector ignores it.
 OUTPUT_FILE="/zfs-metrics/zfs-metrics.prom"
 METRICS_FILE="$OUTPUT_FILE.tmp.$$"
+# dash runs the EXIT trap on exit but not when killed by a signal, so turn signals into exits.
 trap 'rm -f "$METRICS_FILE"' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 > $METRICS_FILE
 
 # Add headers and pool metrics
@@ -126,54 +130,70 @@ BEGIN { pool = ""; in_scrub = 0; scrub_pct = 0; }
 ' >> $METRICS_FILE
 
 # Snapshot age for the datasets under the host's sanoid policy (Phoenix Runbook 1, PHX-18).
-# The dataset list and each dataset's cadence are read from sanoid.conf, mounted read-only (the
-# /etc/sanoid directory, not the file, so an editor's write-and-rename is seen), so a dataset
-# added to the policy is watched without editing this file or the alert rules.
-#   zfs_snapshot_max_age_seconds   - 7200 if the policy takes hourlies, 108000 if dailies only.
-#                                    The alert compares against this, so the threshold follows the
-#                                    policy, not the dataset's name.
+#
+# The policy is resolved by sanoid itself, not re-implemented here: `sanoid --debug --readonly`
+# runs sanoid's own config loader (defaults, template_default, each use_template in order, local
+# keys, toggle normalisation, path =, recursive / zfs children, process_children_only) and dumps
+# the result. It takes and prunes nothing. The result is cached and re-resolved when sanoid.conf
+# changes or every 10 minutes (to pick up new children of recursive sections). /etc/sanoid is
+# mounted as a directory, read-only, so an editor's write-and-rename is seen.
+#
+# Per policy dataset (label policy = "hourly" if it takes hourlies, else "daily"):
 #   zfs_newest_snapshot_timestamp_seconds - creation time of the newest @autosnap_. A manual
-#                                    snapshot must not make a dead sanoid look healthy. 0 = none,
-#                                    which reads as maximally stale rather than absent.
-# Datasets with autosnap = no, or with neither hourlies nor dailies, are skipped. If the config is
-# not mounted, nothing is emitted and ZfsSnapshotMetricsAbsent fires.
-SANOID_CONF=/etc/sanoid/sanoid.conf
+#       snapshot must not make a dead sanoid look healthy. 0 = none yet (maximally stale).
+#   zfs_snapshot_max_age_seconds - 7200 for hourly, 108000 for daily; the alert's threshold.
+# Datasets sanoid will not snapshot (autosnap off, process_children_only, neither hourlies nor
+# dailies) are skipped. If sanoid.conf is missing or sanoid rejects it, nothing is emitted and
+# ZfsSnapshotMetricsAbsent fires - the host's sanoid would be failing on the same config.
+SANOID_DIR=/etc/sanoid
+POLICY_CACHE=/tmp/sanoid-policy.tsv
 echo "# HELP zfs_newest_snapshot_timestamp_seconds Creation time of the newest sanoid autosnap of a policy dataset (0 = none)" >> $METRICS_FILE
 echo "# TYPE zfs_newest_snapshot_timestamp_seconds gauge" >> $METRICS_FILE
 echo "# HELP zfs_snapshot_max_age_seconds Snapshot age above which the dataset's sanoid policy is considered stale" >> $METRICS_FILE
 echo "# TYPE zfs_snapshot_max_age_seconds gauge" >> $METRICS_FILE
-if [ -f "$SANOID_CONF" ]; then
-  # Prints "dataset template max_age" per policy dataset. Values not set on the dataset or its
-  # template fall back to sanoid's own defaults (hourly 48, daily 90, autosnap yes).
-  awk '
-    function trim(x) { gsub(/^[ \t]+|[ \t]+$/, "", x); return x }
-    /^[ \t]*[#;]/ || /^[ \t]*$/ { next }
-    /^[ \t]*\[/ {
-      sec = trim($0); gsub(/^\[|\]$/, "", sec)
-      if (sec !~ /^template_/ && !(sec in seen)) { seen[sec] = 1; order[++n] = sec }
-      next
-    }
-    /=/ {
-      k = trim(substr($0, 1, index($0, "=") - 1)); v = trim(substr($0, index($0, "=") + 1))
-      if (sec ~ /^template_/) tpl[substr(sec, 10), k] = v; else ds[sec, k] = v
-      next
-    }
-    END {
-      for (i = 1; i <= n; i++) {
-        d = order[i]; t = ds[d, "use_template"]
-        h = ((d, "hourly") in ds) ? ds[d, "hourly"] : (((t, "hourly") in tpl) ? tpl[t, "hourly"] : 48)
-        dy = ((d, "daily") in ds) ? ds[d, "daily"] : (((t, "daily") in tpl) ? tpl[t, "daily"] : 90)
-        a = ((d, "autosnap") in ds) ? ds[d, "autosnap"] : (((t, "autosnap") in tpl) ? tpl[t, "autosnap"] : "yes")
-        if (a == "no" || a == "0") continue
-        if (h + 0 > 0) m = 7200; else if (dy + 0 > 0) m = 108000; else continue
-        print d, (t == "" ? "none" : t), m
-      }
-    }' "$SANOID_CONF" | while read ds tpl max_age; do
-    ts=$(zfs list -Hp -t snapshot -o name,creation -s creation -d 1 "$ds" 2>/dev/null \
-      | awk -F'\t' '$1 ~ /@autosnap_/ {t=$2} END {print t+0}')
-    echo "zfs_newest_snapshot_timestamp_seconds{dataset=\"$ds\",template=\"$tpl\"} ${ts:-0}" >> $METRICS_FILE
-    echo "zfs_snapshot_max_age_seconds{dataset=\"$ds\",template=\"$tpl\"} $max_age" >> $METRICS_FILE
-  done
+if [ -f "$SANOID_DIR/sanoid.conf" ]; then
+  if [ ! -s "$POLICY_CACHE" ] || [ "$SANOID_DIR/sanoid.conf" -nt "$POLICY_CACHE" ] \
+     || [ -n "$(find "$POLICY_CACHE" -mmin +10 2>/dev/null)" ]; then
+    mkdir -p /tmp/sanoid-cache /tmp/sanoid-run
+    # Data::Dumper output: a section opens with `'name' => {` and each key is `'k' => v,`.
+    # Truthiness follows Perl, as sanoid tests it: false only for "" and "0".
+    if timeout 120 sanoid --configdir "$SANOID_DIR" --cache-dir /tmp/sanoid-cache \
+         --run-dir /tmp/sanoid-run --debug --readonly 2>/dev/null \
+       | awk '
+          function t(v) { return v != "" && v != "0" }
+          /^\*+ CONFIGS \*+$/ { on = 1; next }
+          !on { next }
+          /^          \x27.*\x27 => \{$/ { insec = 1; split("", k); next }
+          insec && /^ +\x27[a-z_]+\x27 => / {
+            line = $0; sub(/^ +\x27/, "", line)
+            key = line; sub(/\x27 => .*/, "", key)
+            val = line; sub(/^[a-z_]+\x27 => /, "", val); sub(/,$/, "", val)
+            gsub(/^\x27|\x27$/, "", val); k[key] = val; next
+          }
+          insec && /^ +\},?$/ {
+            insec = 0
+            if (!(t(k["autosnap"]) || t(k["zfs_recursion"]))) next
+            if (t(k["process_children_only"])) next
+            if (k["hourly"] + 0 > 0) print k["path"] "\thourly\t7200"
+            else if (k["daily"] + 0 > 0) print k["path"] "\tdaily\t108000"
+          }
+          /^ *\};$/ { exit }' | tr -d '"\\\r' > "$POLICY_CACHE.new" \
+       && [ -s "$POLICY_CACHE.new" ]; then
+      mv -f "$POLICY_CACHE.new" "$POLICY_CACHE"
+    else
+      rm -f "$POLICY_CACHE.new" "$POLICY_CACHE"
+    fi
+  fi
+  if [ -s "$POLICY_CACHE" ]; then
+    tab=$(printf '\t')
+    while IFS="$tab" read -r ds policy max_age; do
+      [ -n "$ds" ] || continue
+      ts=$(zfs list -Hp -t snapshot -o name,creation -s creation -d 1 "$ds" 2>/dev/null \
+        | awk -F'\t' '$1 ~ /@autosnap_/ {t=$2} END {print t+0}')
+      echo "zfs_newest_snapshot_timestamp_seconds{dataset=\"$ds\",policy=\"$policy\"} ${ts:-0}" >> $METRICS_FILE
+      echo "zfs_snapshot_max_age_seconds{dataset=\"$ds\",policy=\"$policy\"} $max_age" >> $METRICS_FILE
+    done < "$POLICY_CACHE"
+  fi
 fi
 
 # Set ownership, then publish atomically

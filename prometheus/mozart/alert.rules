@@ -1001,12 +1001,12 @@ groups:
 
   # ZFS snapshot policy (Phoenix Runbook 1, PHX-18). sanoid runs from a host systemd timer, not
   # from anything in this repo, so the snapshots themselves are the only evidence it is working.
-  # Both series are written by gather-zfs-metrics.sh from /etc/sanoid/sanoid.conf. The threshold
-  # is zfs_snapshot_max_age_seconds, derived from each dataset's policy (2h if it takes hourlies,
-  # 30h if dailies only), so a dataset's name has no bearing on which limit applies. If the
-  # collector dies the timestamp freezes and ages, so this still fires (alongside ZfsMetricsStale).
-  # A newly added dataset reports 0 until sanoid's next pass (<= 15 min, and sanoid takes the
-  # current period's snapshot on its first pass); the 15m `for:` covers that.
+  # gather-zfs-metrics.sh asks sanoid itself to resolve /etc/sanoid/sanoid.conf and emits, per
+  # dataset it will snapshot, the newest autosnap time and zfs_snapshot_max_age_seconds (2h for a
+  # policy with hourlies, 30h for dailies only). The rule compares the two, so the threshold
+  # follows the policy, not the dataset's name. If the collector dies the timestamp freezes and
+  # ages, so this still fires (alongside ZfsMetricsStale). A newly added dataset reports 0 until
+  # sanoid's next pass (<= 15 min); expect at most one spurious fire if it lands just after one.
   - name: zfs-snapshots
     rules:
       - alert: ZfsSnapshotStale
@@ -1016,11 +1016,11 @@ groups:
           severity: warning
         annotations:
           summary: "No new ZFS snapshot of {{ $labels.dataset }} within its policy limit"
-          description: "{{ $labels.dataset }} (sanoid template {{ $labels.template }}) has gone longer than its policy allows without a new autosnap: 2h for a policy with hourlies, 30h for dailies only. The local recovery tier for it is no longer advancing."
+          description: "{{ $labels.dataset }} ({{ $labels.policy }} sanoid policy) has gone longer than its policy allows without a new autosnap: 2h for hourly, 30h for daily. The local recovery tier for it is no longer advancing."
           runbook: "On mozart: `systemctl is-active sanoid.timer`, then `journalctl -u sanoid.service -n 50`. If ZfsMetricsStale is also firing, the collector stopped, not sanoid: the age is being measured from a frozen file."
 
-      # The rule above can only fire on series that exist. If sanoid.conf is not mounted into
-      # zfs-utils, or the collector loses the block, there are no series and it is silent.
+      # The rule above can only fire on series that exist. If sanoid.conf is missing, sanoid
+      # rejects it, or the collector loses the block, there are no series and it is silent.
       # Scoped to mozart so a federated or future copy of the metric elsewhere cannot mask it.
       - alert: ZfsSnapshotMetricsAbsent
         expr: absent(zfs_newest_snapshot_timestamp_seconds{hostname="mozart"}) or absent(zfs_snapshot_max_age_seconds{hostname="mozart"})
@@ -1030,4 +1030,17 @@ groups:
         annotations:
           summary: "No ZFS snapshot-age metrics for mozart"
           description: "zfs_newest_snapshot_timestamp_seconds or zfs_snapshot_max_age_seconds is absent for mozart, so ZfsSnapshotStale cannot fire. Snapshot policy is unmonitored."
-          runbook: "Check that /etc/sanoid/sanoid.conf exists on mozart, that /etc/sanoid is mounted into the zfs-utils container, and that ZfsMetricsStale is not firing."
+          runbook: "On mozart: check /etc/sanoid/sanoid.conf exists and `sudo sanoid --readonly --debug` accepts it, that /etc/sanoid is mounted into zfs-utils, and that ZfsMetricsStale is not firing."
+
+      # absent() only sees total loss. Losing some datasets (one dropped from sanoid.conf, a
+      # collector regression) would be silent, so compare against the most seen in the last day.
+      # An intentional removal fires this for up to a day: silence it.
+      - alert: ZfsSnapshotDatasetsDropped
+        expr: count(zfs_newest_snapshot_timestamp_seconds{hostname="mozart"}) < max_over_time(count(zfs_newest_snapshot_timestamp_seconds{hostname="mozart"})[1d:5m])
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Fewer ZFS datasets under snapshot monitoring than earlier today"
+          description: "{{ $value }} datasets now report snapshot age, fewer than the most seen in the last 24h. A dataset has left the sanoid policy or the collector stopped reporting it."
+          runbook: "Compare `zfs_newest_snapshot_timestamp_seconds` with /etc/sanoid/sanoid.conf on mozart. If the removal was intentional, silence this for 24h."
