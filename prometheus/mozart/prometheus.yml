@@ -110,7 +110,7 @@ scrape_configs:
         labels:
           source: satellite
           host: 192.168.201.12
-          hostname: dns2
+          hostname: dns3
       - targets:
           - 192.168.201.20:9090 # wireguard1
         labels:
@@ -132,6 +132,6 @@ scrape_configs:
     static_configs:
       - targets:
           - '192.168.201.10:9090'  # pi.hole
-          - '192.168.201.11:9090'  # wireguard1
+          - '192.168.201.11:9090'  # dns2
         labels:
           source: satellite
