@@ -17,6 +17,8 @@ BREW_DAEMON=/Library/LaunchDaemons/$BREW_LABEL.plist
 BREW_AGENT=$HOME/Library/LaunchAgents/$BREW_LABEL.plist
 
 healthy() { curl -sf -m 3 -o /dev/null http://localhost:9100/metrics; }
+# Sees root-owned listeners without sudo, unlike lsof.
+port_busy() { netstat -an -p tcp | grep -qE '[.]9100 .*LISTEN'; }
 loaded()  { launchctl print "system/$LABEL" >/dev/null 2>&1; }
 
 status() {
@@ -49,13 +51,22 @@ install() {
 	if [ -f "$BREW_AGENT" ]; then brew services stop node_exporter; fi
 	if loaded; then sudo launchctl bootout "system/$LABEL" || true; fi
 
+	# `brew services stop` returns before the old process releases :9100. Starting
+	# into a held port crash-loops on ThrottleInterval (seen 2026-11-08), so wait.
+	for _ in $(seq 1 30); do port_busy || break; sleep 1; done
+	if port_busy; then
+		echo ":9100 still held after 30s by something else; not installing." >&2
+		netstat -anv -p tcp | grep -E '[.]9100 .*LISTEN' >&2 || true
+		exit 1
+	fi
+
 	# Log file owned by the job user, whichever side of the privilege drop launchd opens it on.
 	sudo touch "$LOG"
 	sudo chown nobody "$LOG"
 	sudo install -m 644 -o root -g wheel "$SRC" "$DST"
 	sudo launchctl bootstrap system "$DST"
 
-	for _ in 1 2 3 4 5 6 7 8 9 10; do healthy && break; sleep 1; done
+	for _ in $(seq 1 30); do healthy && break; sleep 1; done
 	status
 }
 
