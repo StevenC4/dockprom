@@ -12,6 +12,11 @@ route:
     # sets a shorter repeat_interval, so nothing in this pipeline can re-notify
     # about a still-firing alert more than once in 24h.
     #
+    # ONE EXCEPTION: the Watchdog route (first below) repeats every minute. It is
+    # a heartbeat to healthchecks.io, not a notification -- it never reaches a
+    # human, and the repeat IS the signal. The 24h cap still holds for every
+    # notification a person receives.
+    #
     # Set 2026-08-18, after a stopped scheduler produced 37 notifications in 15
     # hours. The inhibit_rules at the bottom of this file cut that fan-out at the
     # source; this cuts the nagging. They fix different halves of the same
@@ -29,6 +34,20 @@ route:
     # notification of anything is unaffected by every number in this file.
     repeat_interval: 24h
     routes:
+      # DEAD MAN'S SWITCH (PHX-35). Watchdog is always firing; this sends it to
+      # healthchecks.io every minute and to NOTHING else (first match, no
+      # `continue`). healthchecks.io notifies when the pings stop: Prometheus,
+      # rule evaluation, Alertmanager, egress or mozart itself down.
+      # The healthchecks check is period 5m + grace 5m, so a dead pipeline
+      # pages within ~10 minutes.
+      - matchers:
+          - alertname="Watchdog"
+        receiver: 'healthchecks'
+        group_by: ['alertname']
+        group_wait: 0s
+        group_interval: 1m
+        repeat_interval: 1m
+
       # The alerting pipeline itself. MUST go to email: these fire precisely when
       # Slack delivery is broken, so routing them to Slack would be a closed loop
       # that reports nothing. (On 2026-07-13 a 0600 webhook file the `nobody`
@@ -168,6 +187,17 @@ route:
             repeat_interval: 24h
 
 receivers:
+  # healthchecks.io ping. The URL is the credential (anyone holding it can fake
+  # "alive"), so it lives in a git-ignored file beside slack_webhook_url, with
+  # the same rule: readable by uid 65534 (`nobody`) or every ping silently fails
+  # -- which AlertmanagerNotificationsFailing{integration="webhook"} would then
+  # email about, and healthchecks.io would page about. url_file needs
+  # Alertmanager >= 0.27 (0.25 rejects it).
+  - name: 'healthchecks'
+    webhook_configs:
+      - url_file: '/etc/alertmanager/healthchecks_ping_url'
+        send_resolved: false
+
   - name: 'email'
     email_configs:
     - &email_config

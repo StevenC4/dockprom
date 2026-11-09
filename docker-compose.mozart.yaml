@@ -14,7 +14,7 @@ volumes:
 
 services:
   alertmanager:
-    image: prom/alertmanager:v0.25.0
+    image: prom/alertmanager:v0.28.1
     container_name: alertmanager
     volumes:
       - ./alertmanager:/etc/alertmanager

@@ -25,6 +25,23 @@ groups:
   # Slack-routed self-alert would be a closed loop that can never report.
   - name: alerting-pipeline
     rules:
+      # DEAD MAN'S SWITCH. Always firing, by design: expr is vector(1). Alertmanager routes it
+      # (and only it) to healthchecks.io roughly once a minute. healthchecks.io alerts when the
+      # pings STOP, which is the one failure nothing on this box can report -- mozart's
+      # Prometheus, rule evaluation, Alertmanager, egress, or the host itself being down.
+      # PHX-35: mozart is the alerting owner, so this is what watches the owner.
+      #
+      # Deliberately NOT service="alerting": that label routes to email, and this must never
+      # reach a human. Its route in alertmanager/config.yml matches alertname="Watchdog" first.
+      - alert: Watchdog
+        expr: vector(1)
+        labels:
+          severity: none
+          service: deadmans-switch
+        annotations:
+          summary: "Dead man's switch heartbeat (always firing; routed to healthchecks.io only)"
+          description: "If this ever stops firing, healthchecks.io notifies. Silencing or inhibiting it WILL page."
+
       # THE rule that would have caught the July 2026 outage on day one. Every
       # nh22 alert fired correctly for 9 days and every one died at the last hop
       # ("open /etc/alertmanager/slack_webhook_url: permission denied"), visible

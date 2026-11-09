@@ -8,6 +8,7 @@
 /textfile_collector/*
 /alertmanager/slack_webhook_url
 /alertmanager/alert_ack_token
+/alertmanager/healthchecks_ping_url
 /secrets/
 /secrets/*
 /prometheus/prometheus.yml

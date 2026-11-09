@@ -15,6 +15,24 @@ evaluation_interval: 1m
 
 tests:
   # ---------------------------------------------------------------------------
+  # Watchdog (dead man's switch). Must fire with no input at all -- an empty TSDB is
+  # exactly the state it exists to be independent of. If this ever goes silent,
+  # healthchecks.io pages.
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    name: watchdog always fires
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: Watchdog
+        exp_alerts:
+          - exp_labels:
+              severity: none
+              service: deadmans-switch
+            exp_annotations:
+              summary: "Dead man's switch heartbeat (always firing; routed to healthchecks.io only)"
+              description: "If this ever stops firing, healthchecks.io notifies. Silencing or inhibiting it WILL page."
+
+  # ---------------------------------------------------------------------------
   # NH22CdbabyReauthReminderUndelivered
   #
   # delivery_success is 0 on a quiet run as well as a failed one, so the rule is only correct
