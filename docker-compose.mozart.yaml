@@ -171,7 +171,9 @@ services:
       - /dev:/dev:ro
       - ./textfile_collector:/zfs-metrics
       # Read by gather-zfs-metrics.sh for the snapshot-age dataset list (Phoenix Runbook 1).
-      - /etc/sanoid/sanoid.conf:/etc/sanoid/sanoid.conf:ro
+      # The directory, not the file: a single-file bind pins the inode, so an edit that writes a
+      # new file and renames it over the old one would leave the container reading the stale copy.
+      - /etc/sanoid:/etc/sanoid:ro
     labels:
       - com.centurylinklabs.watchtower.enable=false
 

@@ -1,9 +1,11 @@
 #!/bin/sh
 
-# Output file
-METRICS_FILE="/zfs-metrics/zfs-metrics.prom"
-
-# Clear previous metrics
+# Output file. Everything is written to a temp file in the same directory and renamed into place
+# at the end, so node_exporter never scrapes a half-written file. The temp name does not end in
+# .prom, so the textfile collector ignores it.
+OUTPUT_FILE="/zfs-metrics/zfs-metrics.prom"
+METRICS_FILE="$OUTPUT_FILE.tmp.$$"
+trap 'rm -f "$METRICS_FILE"' EXIT
 > $METRICS_FILE
 
 # Add headers and pool metrics
@@ -124,21 +126,57 @@ BEGIN { pool = ""; in_scrub = 0; scrub_pct = 0; }
 ' >> $METRICS_FILE
 
 # Snapshot age for the datasets under the host's sanoid policy (Phoenix Runbook 1, PHX-18).
-# The dataset list is read from the [datavault/...] headers of sanoid.conf, mounted read-only, so
-# a dataset added to the policy is watched without editing this file. Only @autosnap_ snapshots
-# count: a manual snapshot must not make a dead sanoid look healthy. A policy dataset with no
-# autosnap at all reports 0, which reads as maximally stale rather than absent. If the config is
+# The dataset list and each dataset's cadence are read from sanoid.conf, mounted read-only (the
+# /etc/sanoid directory, not the file, so an editor's write-and-rename is seen), so a dataset
+# added to the policy is watched without editing this file or the alert rules.
+#   zfs_snapshot_max_age_seconds   - 7200 if the policy takes hourlies, 108000 if dailies only.
+#                                    The alert compares against this, so the threshold follows the
+#                                    policy, not the dataset's name.
+#   zfs_newest_snapshot_timestamp_seconds - creation time of the newest @autosnap_. A manual
+#                                    snapshot must not make a dead sanoid look healthy. 0 = none,
+#                                    which reads as maximally stale rather than absent.
+# Datasets with autosnap = no, or with neither hourlies nor dailies, are skipped. If the config is
 # not mounted, nothing is emitted and ZfsSnapshotMetricsAbsent fires.
 SANOID_CONF=/etc/sanoid/sanoid.conf
 echo "# HELP zfs_newest_snapshot_timestamp_seconds Creation time of the newest sanoid autosnap of a policy dataset (0 = none)" >> $METRICS_FILE
 echo "# TYPE zfs_newest_snapshot_timestamp_seconds gauge" >> $METRICS_FILE
+echo "# HELP zfs_snapshot_max_age_seconds Snapshot age above which the dataset's sanoid policy is considered stale" >> $METRICS_FILE
+echo "# TYPE zfs_snapshot_max_age_seconds gauge" >> $METRICS_FILE
 if [ -f "$SANOID_CONF" ]; then
-  for ds in $(awk -F'[][]' '/^\[datavault\//{print $2}' "$SANOID_CONF"); do
+  # Prints "dataset template max_age" per policy dataset. Values not set on the dataset or its
+  # template fall back to sanoid's own defaults (hourly 48, daily 90, autosnap yes).
+  awk '
+    function trim(x) { gsub(/^[ \t]+|[ \t]+$/, "", x); return x }
+    /^[ \t]*[#;]/ || /^[ \t]*$/ { next }
+    /^[ \t]*\[/ {
+      sec = trim($0); gsub(/^\[|\]$/, "", sec)
+      if (sec !~ /^template_/ && !(sec in seen)) { seen[sec] = 1; order[++n] = sec }
+      next
+    }
+    /=/ {
+      k = trim(substr($0, 1, index($0, "=") - 1)); v = trim(substr($0, index($0, "=") + 1))
+      if (sec ~ /^template_/) tpl[substr(sec, 10), k] = v; else ds[sec, k] = v
+      next
+    }
+    END {
+      for (i = 1; i <= n; i++) {
+        d = order[i]; t = ds[d, "use_template"]
+        h = ((d, "hourly") in ds) ? ds[d, "hourly"] : (((t, "hourly") in tpl) ? tpl[t, "hourly"] : 48)
+        dy = ((d, "daily") in ds) ? ds[d, "daily"] : (((t, "daily") in tpl) ? tpl[t, "daily"] : 90)
+        a = ((d, "autosnap") in ds) ? ds[d, "autosnap"] : (((t, "autosnap") in tpl) ? tpl[t, "autosnap"] : "yes")
+        if (a == "no" || a == "0") continue
+        if (h + 0 > 0) m = 7200; else if (dy + 0 > 0) m = 108000; else continue
+        print d, (t == "" ? "none" : t), m
+      }
+    }' "$SANOID_CONF" | while read ds tpl max_age; do
     ts=$(zfs list -Hp -t snapshot -o name,creation -s creation -d 1 "$ds" 2>/dev/null \
       | awk -F'\t' '$1 ~ /@autosnap_/ {t=$2} END {print t+0}')
-    echo "zfs_newest_snapshot_timestamp_seconds{dataset=\"$ds\"} ${ts:-0}" >> $METRICS_FILE
+    echo "zfs_newest_snapshot_timestamp_seconds{dataset=\"$ds\",template=\"$tpl\"} ${ts:-0}" >> $METRICS_FILE
+    echo "zfs_snapshot_max_age_seconds{dataset=\"$ds\",template=\"$tpl\"} $max_age" >> $METRICS_FILE
   done
 fi
 
-# Set ownership of the metrics file
+# Set ownership, then publish atomically
 chown ${PUID:-1000}:${PGID:-1000} $METRICS_FILE
+chmod 0644 $METRICS_FILE
+mv -f $METRICS_FILE $OUTPUT_FILE
