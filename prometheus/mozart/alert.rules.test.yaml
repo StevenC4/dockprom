@@ -650,3 +650,190 @@ tests:
       - eval_time: 1500m
         alertname: GarminDeviceSyncStale
         exp_alerts: []
+
+  # ---------------------------------------------------------------------------
+  # ZfsSnapshotStale / ZfsSnapshotMetricsAbsent
+  #
+  # The threshold comes from zfs_snapshot_max_age_seconds, so the gate is that a daily-only
+  # dataset is held to 30h and an hourly one to 2h. Each case is built to fail under a specific
+  # mutation: a 1h threshold (late-hourly case), for: 0m (brief-breach checks), a misspelt metric
+  # in the absent rule (both-present case), or an unscoped absent (other-host case).
+  # ---------------------------------------------------------------------------
+  - interval: 1m
+    name: daily-only dataset 29h since snapshot - silent; 31h - fires
+    input_series:
+      - series: 'zfs_newest_snapshot_timestamp_seconds{dataset="datavault/backups",policy="daily",hostname="mozart"}'
+        values: '0x1900'
+      - series: 'zfs_snapshot_max_age_seconds{dataset="datavault/backups",policy="daily",hostname="mozart"}'
+        values: '108000x1900'
+    alert_rule_test:
+      - eval_time: 29h
+        alertname: ZfsSnapshotStale
+        exp_alerts: []
+      - eval_time: 31h
+        alertname: ZfsSnapshotStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              dataset: datavault/backups
+              policy: daily
+              hostname: mozart
+            exp_annotations:
+              summary: "No new ZFS snapshot of datavault/backups within its policy limit"
+              description: "datavault/backups (daily sanoid policy) has gone longer than its policy allows without a new autosnap: 2h for hourly, 30h for daily. The local recovery tier for it is no longer advancing."
+              runbook: "On mozart: `systemctl is-active sanoid.timer`, then `journalctl -u sanoid.service -n 50`. If ZfsMetricsStale is also firing, the collector stopped, not sanoid: the age is being measured from a frozen file."
+
+  - interval: 1m
+    name: hourly dataset whose snapshot slips to 80m - must stay silent
+    input_series:
+      # sanoid's 15-min timer plus a slow pass can stretch one interval; 80m is still healthy.
+      - series: 'zfs_newest_snapshot_timestamp_seconds{dataset="datavault/sparkyfitness-db",policy="hourly",hostname="mozart"}'
+        values: '0x79 4800x159'
+      - series: 'zfs_snapshot_max_age_seconds{dataset="datavault/sparkyfitness-db",policy="hourly",hostname="mozart"}'
+        values: '7200x239'
+    alert_rule_test:
+      - eval_time: 79m
+        alertname: ZfsSnapshotStale
+        exp_alerts: []
+      - eval_time: 150m
+        alertname: ZfsSnapshotStale
+        exp_alerts: []
+
+  - interval: 1m
+    name: hourly dataset whose snapshots stop - silent until 2h + for 15m, then fires
+    input_series:
+      - series: 'zfs_newest_snapshot_timestamp_seconds{dataset="datavault/sparkyfitness-db",policy="hourly",hostname="mozart"}'
+        values: '0x300'
+      - series: 'zfs_snapshot_max_age_seconds{dataset="datavault/sparkyfitness-db",policy="hourly",hostname="mozart"}'
+        values: '7200x300'
+    alert_rule_test:
+      # Past 2h but inside the 15m for:, so a for: 0m mutation fails here.
+      - eval_time: 130m
+        alertname: ZfsSnapshotStale
+        exp_alerts: []
+      - eval_time: 140m
+        alertname: ZfsSnapshotStale
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              dataset: datavault/sparkyfitness-db
+              policy: hourly
+              hostname: mozart
+            exp_annotations:
+              summary: "No new ZFS snapshot of datavault/sparkyfitness-db within its policy limit"
+              description: "datavault/sparkyfitness-db (hourly sanoid policy) has gone longer than its policy allows without a new autosnap: 2h for hourly, 30h for daily. The local recovery tier for it is no longer advancing."
+              runbook: "On mozart: `systemctl is-active sanoid.timer`, then `journalctl -u sanoid.service -n 50`. If ZfsMetricsStale is also firing, the collector stopped, not sanoid: the age is being measured from a frozen file."
+
+  - interval: 1m
+    name: hourly dataset breaches briefly then a snapshot lands - must stay silent
+    input_series:
+      # Over 2h from 121m to 129m only, then the late snapshot (taken at 120m) appears.
+      - series: 'zfs_newest_snapshot_timestamp_seconds{dataset="datavault/sparkyfitness-db",policy="hourly",hostname="mozart"}'
+        values: '0x129 7200x60'
+      - series: 'zfs_snapshot_max_age_seconds{dataset="datavault/sparkyfitness-db",policy="hourly",hostname="mozart"}'
+        values: '7200x190'
+    alert_rule_test:
+      - eval_time: 129m
+        alertname: ZfsSnapshotStale
+        exp_alerts: []
+      - eval_time: 150m
+        alertname: ZfsSnapshotStale
+        exp_alerts: []
+
+  - interval: 1m
+    name: no snapshot-age series at all - absent fires
+    input_series:
+      - series: 'up{job="nodeexporter"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ZfsSnapshotMetricsAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              hostname: mozart
+            exp_annotations:
+              summary: "No ZFS snapshot-age metrics for mozart"
+              description: "zfs_newest_snapshot_timestamp_seconds or zfs_snapshot_max_age_seconds is absent for mozart, so ZfsSnapshotStale cannot fire. Snapshot policy is unmonitored."
+              runbook: "On mozart: check /etc/sanoid/sanoid.conf exists and `sudo sanoid --readonly --debug` accepts it, that /etc/sanoid is mounted into zfs-utils, and that ZfsMetricsStale is not firing."
+
+  - interval: 1m
+    name: timestamp present but max-age series missing - absent fires
+    input_series:
+      - series: 'zfs_newest_snapshot_timestamp_seconds{dataset="datavault/sparkyfitness-db",policy="hourly",hostname="mozart"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ZfsSnapshotMetricsAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              hostname: mozart
+            exp_annotations:
+              summary: "No ZFS snapshot-age metrics for mozart"
+              description: "zfs_newest_snapshot_timestamp_seconds or zfs_snapshot_max_age_seconds is absent for mozart, so ZfsSnapshotStale cannot fire. Snapshot policy is unmonitored."
+              runbook: "On mozart: check /etc/sanoid/sanoid.conf exists and `sudo sanoid --readonly --debug` accepts it, that /etc/sanoid is mounted into zfs-utils, and that ZfsMetricsStale is not firing."
+
+  - interval: 1m
+    name: series present only for another host - absent still fires for mozart
+    input_series:
+      - series: 'zfs_newest_snapshot_timestamp_seconds{dataset="datavault/sparkyfitness-db",policy="hourly",hostname="dalza"}'
+        values: '0x30'
+      - series: 'zfs_snapshot_max_age_seconds{dataset="datavault/sparkyfitness-db",policy="hourly",hostname="dalza"}'
+        values: '7200x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ZfsSnapshotMetricsAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              hostname: mozart
+            exp_annotations:
+              summary: "No ZFS snapshot-age metrics for mozart"
+              description: "zfs_newest_snapshot_timestamp_seconds or zfs_snapshot_max_age_seconds is absent for mozart, so ZfsSnapshotStale cannot fire. Snapshot policy is unmonitored."
+              runbook: "On mozart: check /etc/sanoid/sanoid.conf exists and `sudo sanoid --readonly --debug` accepts it, that /etc/sanoid is mounted into zfs-utils, and that ZfsMetricsStale is not firing."
+
+  - interval: 1m
+    name: both series present for mozart - absent must stay silent
+    input_series:
+      - series: 'zfs_newest_snapshot_timestamp_seconds{dataset="datavault/sparkyfitness-db",policy="hourly",hostname="mozart"}'
+        values: '0+60x30'
+      - series: 'zfs_snapshot_max_age_seconds{dataset="datavault/sparkyfitness-db",policy="hourly",hostname="mozart"}'
+        values: '7200x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: ZfsSnapshotMetricsAbsent
+        exp_alerts: []
+
+  - interval: 5m
+    name: one of two datasets stops reporting - ZfsSnapshotDatasetsDropped fires
+    input_series:
+      - series: 'zfs_newest_snapshot_timestamp_seconds{dataset="datavault/sparkyfitness-db",policy="hourly",hostname="mozart"}'
+        values: '0x30'
+      - series: 'zfs_newest_snapshot_timestamp_seconds{dataset="datavault/backups",policy="daily",hostname="mozart"}'
+        values: '0x12 stale'
+    alert_rule_test:
+      - eval_time: 55m
+        alertname: ZfsSnapshotDatasetsDropped
+        exp_alerts: []
+      - eval_time: 100m
+        alertname: ZfsSnapshotDatasetsDropped
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "Fewer ZFS datasets under snapshot monitoring than earlier today"
+              description: "1 datasets now report snapshot age, fewer than the most seen in the last 24h. A dataset has left the sanoid policy or the collector stopped reporting it."
+              runbook: "Compare `zfs_newest_snapshot_timestamp_seconds` with /etc/sanoid/sanoid.conf on mozart. If the removal was intentional, silence this for 24h."
+
+  - interval: 5m
+    name: stable dataset count - ZfsSnapshotDatasetsDropped stays silent
+    input_series:
+      - series: 'zfs_newest_snapshot_timestamp_seconds{dataset="datavault/sparkyfitness-db",policy="hourly",hostname="mozart"}'
+        values: '0x30'
+      - series: 'zfs_newest_snapshot_timestamp_seconds{dataset="datavault/backups",policy="daily",hostname="mozart"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 100m
+        alertname: ZfsSnapshotDatasetsDropped
+        exp_alerts: []
