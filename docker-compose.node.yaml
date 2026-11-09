@@ -1,0 +1,17 @@
+# Exporter-only role, for hosts with no Traefik, Watchtower or Prometheus of
+# their own (chopin, brahms). Standalone: not layered on the base file, because
+# base needs external networks and a secret these hosts do not have.
+# mozart scrapes <host>:9100 directly, the same way it scrapes dalza.
+name: dockprom
+
+networks:
+  monitor-net:
+    name: monitor-net
+
+services:
+  nodeexporter:
+    extends:
+      file: docker-compose.base.yaml
+      service: nodeexporter
+    ports:
+      - "9100:9100"

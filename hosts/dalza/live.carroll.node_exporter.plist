@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  dalza node_exporter as a system LaunchDaemon: starts at boot, not at login.
+  Installed by `make up` (hosts/dalza/launchd.sh). Replaces brew's
+  sh.brew.node_exporter plist, which has no KeepAlive and passes no flags.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>live.carroll.node_exporter</string>
+
+	<key>ProgramArguments</key>
+	<array>
+		<string>/opt/homebrew/opt/node_exporter/bin/node_exporter</string>
+		<string>--web.listen-address=:9100</string>
+		<!-- Fails every scrape on Apple Silicon ("no CPU power status has been recorded"). -->
+		<string>--no-collector.thermal</string>
+	</array>
+
+	<!-- Least privilege: no collector used on Darwin needs root. -->
+	<key>UserName</key>
+	<string>nobody</string>
+
+	<key>RunAtLoad</key>
+	<true/>
+	<!-- Restart after a crash. A crash-loop still shows as up == 0 to mozart. -->
+	<key>KeepAlive</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>10</integer>
+
+	<key>StandardOutPath</key>
+	<string>/Library/Logs/node_exporter.log</string>
+	<key>StandardErrorPath</key>
+	<string>/Library/Logs/node_exporter.log</string>
+</dict>
+</plist>
