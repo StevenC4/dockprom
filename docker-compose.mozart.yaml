@@ -276,6 +276,11 @@ services:
         # within the hour regardless of the cause. The per-channel degradation fix means this
         # particular cause cannot recur; the alert is what covers the next one.
         homelab-slack-gateway|homelab-slack
+        # Added 2026-11-17 (PHX-19). Long-lived container that ofelia-dockprom job-execs the nightly
+        # restic backup into. Deliberately NOT in ONESHOT_TARGETS: it never exits, so FinishedAt
+        # stays at zero and OneShotJobNeverRan would fire forever. Freshness of the backup itself is
+        # the mozart-backup alert group (mozart_backup_last_success_timestamp_seconds, 108000s).
+        mozart-backup|mozart-backup
         # Added 2026-10-16 (Phoenix gate 11, Requirement 8 finding 2). Nothing watched the SparkyFitness
         # stack: container_disappeared is filtered to monitor_group="monitoring", and -- found the
         # same day -- mozart's cAdvisor exports NO Docker containers at all (one root-cgroup series),

@@ -1008,13 +1008,54 @@ groups:
         # scalar, so `\\.` reaches PromQL verbatim; PromQL then unescapes the string literal to
         # `\.` for the regex engine. A single `\.` here is a PromQL parse error ("unknown escape
         # sequence"), which takes the whole rules file down, not just this rule.
-        expr: time() - node_textfile_mtime_seconds{file!~"(.*/)?(zfs-metrics|oneshot_jobs|nh22_extractor|nh22_cdbaby_reauth_reminder|sparky_activity_push)\\.prom"} > 3600
+        expr: time() - node_textfile_mtime_seconds{file!~"(.*/)?(zfs-metrics|oneshot_jobs|nh22_extractor|nh22_cdbaby_reauth_reminder|sparky_activity_push|mozart_backup)\\.prom"} > 3600
         for: 30m
         labels:
           severity: warning
         annotations:
           summary: "Textfile collector {{ $labels.file }} has stopped updating"
           description: "{{ $labels.file }} has not been written in over an hour. Its metrics are frozen at their last values rather than absent, so they will look healthy."
+
+  # Nightly offsite backup (PHX-19, ~/src/mozart-backup). backup.sh writes mozart_backup.prom once
+  # per run, success or failure, so it is excluded from TextfileCollectorStale above (it would fire
+  # every night an hour after the run). It is NOT in oneshot-exporter's ONESHOT_TARGETS: the
+  # container is a long-lived `sleep infinity` that Ofelia job-execs into, so FinishedAt never
+  # advances and OneShotJobNeverRan would fire permanently. The job reports for itself instead.
+  # 108000s (30h) = the 24h cadence plus slack for a slow run or a DST shift.
+  # `flow` is kept so PHX-102 can add vault/dalza under the same rules.
+  - name: mozart-backup
+    rules:
+      - alert: MozartBackupStale
+        expr: time() - mozart_backup_last_success_timestamp_seconds > 108000
+        for: 15m
+        labels:
+          severity: warning
+          service: mozart-backup
+        annotations:
+          summary: "Offsite backup flow {{ $labels.flow }} has not succeeded in over 30h"
+          description: "mozart_backup_last_success_timestamp_seconds{flow=\"{{ $labels.flow }}\"} is {{ $value | humanizeDuration }} old. The nightly restic push to R2 is failing or not being scheduled."
+          runbook: "`docker logs ofelia-dockprom | grep mozart-backup`, then `docker exec mozart-backup /scripts/backup.sh` by hand. See ~/src/mozart-backup/README.md."
+
+      - alert: MozartBackupFailing
+        expr: mozart_backup_last_exit_code != 0
+        for: 15m
+        labels:
+          severity: warning
+          service: mozart-backup
+        annotations:
+          summary: "Offsite backup flow {{ $labels.flow }} last run exited {{ $value }}"
+          description: "The last run of backup.sh failed. MozartBackupStale follows once the last success is 30h old."
+          runbook: "`docker exec mozart-backup /scripts/backup.sh` by hand and read the error. See ~/src/mozart-backup/README.md."
+
+      - alert: MozartBackupMetricsMissing
+        expr: absent(mozart_backup_last_success_timestamp_seconds{flow="db_offsite"})
+        for: 30h
+        labels:
+          severity: warning
+          service: mozart-backup
+        annotations:
+          summary: "No mozart_backup metrics at all"
+          description: "mozart_backup.prom has never been written, is unparseable, or was deleted. MozartBackupStale is blind in this state."
 
   # ZFS snapshot policy (Phoenix Runbook 1, PHX-18). sanoid runs from a host systemd timer, not
   # from anything in this repo, so the snapshots themselves are the only evidence it is working.
